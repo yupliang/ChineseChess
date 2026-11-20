@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   applyMove,
+  isKingInCheck,
   moveToChinese,
   parseFen,
   parseUciMove,
@@ -16,6 +17,7 @@ import { answerQuestion } from './explain/qa';
 import { TIER_META } from './explain/winrate';
 import { START_FEN, useGame } from './game/useGame';
 import { applyPv } from './game/pv';
+import { playMoveSound, primeAudio } from './game/sound';
 import type { Ply } from './game/types';
 
 export default function App() {
@@ -27,6 +29,30 @@ export default function App() {
 
   const card = inspect ?? game.card;
   const started = game.phase !== 'idle';
+
+  // 浏览器要求用户手势后才能出声，首次点任意位置先解锁
+  useEffect(() => {
+    const unlock = () => primeAudio();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    return () => window.removeEventListener('pointerdown', unlock);
+  }, []);
+
+  // 每走一步响一下：吃子更沉，将军叠铃声；悔棋（步数变少）不响
+  const lastMoveRef = useRef(game.lastMove);
+  const prevPosRef = useRef(game.position);
+  const plyCountRef = useRef(game.plies.length);
+  useEffect(() => {
+    const undone = game.plies.length < plyCountRef.current;
+    const isNewMove = game.lastMove !== lastMoveRef.current && game.lastMove !== null;
+    if (isNewMove && !undone) {
+      const captured =
+        prevPosRef.current.board.filter(Boolean).length > game.position.board.filter(Boolean).length;
+      playMoveSound({ capture: captured, check: isKingInCheck(game.position, game.position.turn) });
+    }
+    lastMoveRef.current = game.lastMove;
+    prevPosRef.current = game.position;
+    plyCountRef.current = game.plies.length;
+  }, [game.lastMove, game.position, game.plies.length]);
 
   const resetViews = () => {
     setPreview(null);
