@@ -1,3 +1,4 @@
+import { moveChineseFrom } from '../game/pv';
 import type { Ply } from '../game/types';
 import { moveAccuracy, TIER_META } from './winrate';
 
@@ -79,7 +80,7 @@ export function ReviewPanel({ plies, onJump }: ReviewPanelProps) {
                 <span className="badge" style={{ background: meta.color }}>
                   {meta.glyph}
                 </span>
-                <code>{p.uci}</code>
+                <code>{moveChineseFrom(p.fenBefore, p.uci)}</code>
                 <span className="loss">亏 {(p.lossPct ?? 0).toFixed(1)}% 胜率</span>
                 <button onClick={() => onJump(p)}>看这步</button>
               </li>

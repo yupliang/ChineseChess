@@ -24,7 +24,7 @@ describe('模板渲染器', () => {
     const text = renderFact(HANGING, 'blunt');
     expect(text).toContain('白给');
     expect(text).toContain('炮');
-    expect(text).toContain('a5');
+    expect(text).toContain('九路');
     expect(text).toContain('450');
   });
 

@@ -1,7 +1,7 @@
 import { pieceName, squareName, type Piece, type Position, type Square } from '@cc/rules';
 
 const CELL = 54;
-const MARGIN = 34;
+const MARGIN = 46;
 const W = 8 * CELL + MARGIN * 2;
 const H = 9 * CELL + MARGIN * 2;
 
@@ -10,6 +10,7 @@ const py = (rank: number) => MARGIN + (9 - rank) * CELL;
 
 const FILES = [0, 1, 2, 3, 4, 5, 6, 7, 8];
 const RANKS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+const CN_FILES = ['九', '八', '七', '六', '五', '四', '三', '二', '一'];
 
 export interface ChessboardProps {
   position: Position;
@@ -131,6 +132,27 @@ export function Chessboard({
       >
         汉 界
       </text>
+
+      {/* 坐标刻度：上缘黑方视角 1~9（左→右），下缘红方视角 一~九（右→左） */}
+      <g
+        fontSize={13}
+        fill="#7a5c34"
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fontFamily="Songti SC, STSong, SimSun, serif"
+        pointerEvents="none"
+      >
+        {FILES.map((file) => (
+          <text key={`tf${file}`} x={px(file)} y={py(9) - 33}>
+            {file + 1}
+          </text>
+        ))}
+        {FILES.map((file) => (
+          <text key={`bf${file}`} x={px(file)} y={py(0) + 33}>
+            {CN_FILES[file]}
+          </text>
+        ))}
+      </g>
 
       {/* 上一步走法 */}
       {lastMove &&

@@ -1,12 +1,20 @@
 import { useMemo, useState } from 'react';
-import { parseFen, parseUciMove, type Square, type Tone } from '@cc/rules';
+import {
+  applyMove,
+  moveToChinese,
+  parseFen,
+  parseUciMove,
+  type Position,
+  type Square,
+  type Tone,
+} from '@cc/rules';
 import { Chessboard } from './board/Chessboard';
 import { ReasonCard } from './explain/ReasonCard';
 import { QuestionPanel } from './explain/QuestionPanel';
 import { ReviewPanel } from './explain/ReviewPanel';
 import { answerQuestion } from './explain/qa';
 import { TIER_META } from './explain/winrate';
-import { useGame } from './game/useGame';
+import { START_FEN, useGame } from './game/useGame';
 import { applyPv } from './game/pv';
 import type { Ply } from './game/types';
 
@@ -39,6 +47,24 @@ export default function App() {
     if (inspect) return parseUciMove(inspect.uci);
     return game.lastMove;
   }, [preview, inspect, game.lastMove]);
+
+  const chineseMoves = useMemo(() => {
+    const out: string[] = [];
+    let pos: Position | null = parseFen(START_FEN);
+    for (const p of game.plies) {
+      let text = p.uci;
+      if (pos) {
+        text = moveToChinese(pos, p.uci);
+        try {
+          pos = applyMove(pos, parseUciMove(p.uci));
+        } catch {
+          pos = null;
+        }
+      }
+      out.push(text);
+    }
+    return out;
+  }, [game.plies]);
 
   return (
     <div className="app">
@@ -174,7 +200,7 @@ export default function App() {
                   const meta = p.tier ? TIER_META[p.tier] : null;
                   return (
                     <li key={i} className={p.mover === 'red' ? 'red' : 'black'}>
-                      {p.mover === 'red' ? '红' : '黑'} {p.uci}
+                      {p.mover === 'red' ? '红' : '黑'} {chineseMoves[i]}
                       {meta && (
                         <span style={{ marginLeft: 8, color: meta.color, fontSize: 12 }}>
                           {meta.glyph}

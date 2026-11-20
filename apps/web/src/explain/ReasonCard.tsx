@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import { parseSquare, renderFacts, type Fact, type Square, type Tone } from '@cc/rules';
+import { moveChineseFrom, pvChineseFrom } from '../game/pv';
 import { TIER_META } from './winrate';
 import type { Ply } from '../game/types';
 
@@ -32,8 +33,9 @@ export function ReasonCard({
   const tier = ply.tier ?? 'normal';
   const meta = TIER_META[tier];
   const facts = ply.facts ?? [];
-  const sentences = renderFacts(facts, tone);
-  const hasBetterMove = ply.bestMove && ply.bestMove !== ply.uci && facts.length > 0;
+  const sentences = renderFacts(facts, tone, ply.mover);
+  const betterMove =
+    ply.bestMove && ply.bestMove !== ply.uci && facts.length > 0 ? ply.bestMove : null;
 
   return (
     <section
@@ -110,12 +112,16 @@ export function ReasonCard({
         </p>
       )}
 
-      {hasBetterMove && (
+      {betterMove && (
         <div style={{ borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: 10 }}>
           <div style={{ fontSize: 13, color: '#444', marginBottom: 6 }}>
-            引擎推荐：<code style={{ fontWeight: 700 }}>{ply.bestMove}</code>
+            引擎推荐：<code style={{ fontWeight: 700 }}>
+              {moveChineseFrom(ply.fenBefore, betterMove)}
+            </code>
             {ply.pv && ply.pv.length > 1 && (
-              <span style={{ color: '#777' }}>（{ply.pv.slice(0, 3).join(' ')} …）</span>
+              <span style={{ color: '#777' }}>
+                （{pvChineseFrom(ply.fenBefore, ply.pv.slice(0, 3)).join(' ')} …）
+              </span>
             )}
           </div>
 

@@ -1,4 +1,5 @@
 import { renderFacts, type Tone } from '@cc/rules';
+import { moveChineseFrom, pvChineseFrom } from '../game/pv';
 import type { Ply } from '../game/types';
 
 type Intent = 'why' | 'correct' | 'loss' | null;
@@ -38,13 +39,17 @@ export function answerQuestion(ply: Ply, question: string, tone: Tone = 'plain')
           ? '引擎认为这步就是首选，没有可挑的战术问题。'
           : '这步整体偏亏，但找不到单一明确的战术原因。';
       }
-      return renderFacts(ply.facts, tone).join('');
-    case 'correct':
+      return renderFacts(ply.facts, tone, ply.mover).join('');
+    case 'correct': {
       if (!ply.bestMove) return '引擎还没给出推荐走法。';
-      if (ply.bestMove === ply.uci) return `你走的 ${ply.uci} 就是引擎首选。`;
-      return `引擎推荐 ${ply.bestMove}，比你走的 ${ply.uci} 更好${
-        ply.pv && ply.pv.length > 1 ? `，后续可能是 ${ply.pv.slice(0, 4).join(' ')}` : ''
-      }。`;
+      const mine = moveChineseFrom(ply.fenBefore, ply.uci);
+      if (ply.bestMove === ply.uci) return `你走的 ${mine} 就是引擎首选。`;
+      const follow =
+        ply.pv && ply.pv.length > 1
+          ? `，后续可能是 ${pvChineseFrom(ply.fenBefore, ply.pv.slice(0, 4)).join(' ')}`
+          : '';
+      return `引擎推荐 ${moveChineseFrom(ply.fenBefore, ply.bestMove)}，比你走的 ${mine} 更好${follow}。`;
+    }
     case 'loss':
       if (ply.lossPct === undefined) return '这一步没有胜率数据。';
       if (ply.lossPct < 0.5) return '这步对胜率几乎没有影响。';
