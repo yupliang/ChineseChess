@@ -339,6 +339,25 @@ export function useGame() {
     [phase, position, selected, playMove]
   );
 
+  /** 给某一步追加一条问答，随 Ply 一起持久化。 */
+  const addQuestion = useCallback(
+    (target: Ply, question: string, answer: string) => {
+      let idx = plies.indexOf(target);
+      if (idx < 0) idx = plies.findIndex((p) => p.uci === target.uci && p.mover === target.mover);
+      if (idx < 0) return;
+      const updated: Ply = {
+        ...plies[idx],
+        qa: [...(plies[idx].qa ?? []), { q: question, a: answer, at: Date.now() }],
+      };
+      const next = [...plies];
+      next[idx] = updated;
+      setPlies(next);
+      if (card === target) setCard(updated);
+      saveCurrent(next);
+    },
+    [plies, card]
+  );
+
   const undo = useCallback(() => {
     if (busyRef.current || phase === 'loading') return;
     let keep = -1;
@@ -393,5 +412,6 @@ export function useGame() {
     devAutoMove,
     onSquareClick,
     dismissCard: () => setCard(null),
+    addQuestion,
   };
 }

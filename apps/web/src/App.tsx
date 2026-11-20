@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react';
 import { parseFen, parseUciMove, type Square, type Tone } from '@cc/rules';
 import { Chessboard } from './board/Chessboard';
 import { ReasonCard } from './explain/ReasonCard';
+import { QuestionPanel } from './explain/QuestionPanel';
 import { ReviewPanel } from './explain/ReviewPanel';
+import { answerQuestion } from './explain/qa';
 import { TIER_META } from './explain/winrate';
 import { useGame } from './game/useGame';
 import { applyPv } from './game/pv';
@@ -135,24 +137,31 @@ export default function App() {
             />
           )}
 
-          {card && (
-            <ReasonCard
-              ply={card}
-              tone={tone}
-              onHighlight={(sqs) => setHighlights(sqs)}
-              preview={preview ? { index: preview.index, total: preview.moves.length } : null}
-              onPreviewEnter={() => {
-                if (card.pv?.length) setPreview({ moves: card.pv, index: 0 });
-              }}
-              onPreviewStep={(delta) =>
-                setPreview((p) =>
-                  p
-                    ? { ...p, index: Math.max(0, Math.min(p.moves.length, p.index + delta)) }
-                    : p
-                )
-              }
-              onPreviewExit={() => setPreview(null)}
-            />
+          {card && card.mover === 'red' && (
+            <>
+              <ReasonCard
+                ply={card}
+                tone={tone}
+                onHighlight={(sqs) => setHighlights(sqs)}
+                preview={preview ? { index: preview.index, total: preview.moves.length } : null}
+                onPreviewEnter={() => {
+                  if (card.pv?.length) setPreview({ moves: card.pv, index: 0 });
+                }}
+                onPreviewStep={(delta) =>
+                  setPreview((p) =>
+                    p
+                      ? { ...p, index: Math.max(0, Math.min(p.moves.length, p.index + delta)) }
+                      : p
+                  )
+                }
+                onPreviewExit={() => setPreview(null)}
+              />
+              <QuestionPanel
+                ply={card}
+                disabled={!!inspect || game.phase !== 'player'}
+                onAsk={(q) => game.addQuestion(card, q, answerQuestion(card, q, tone))}
+              />
+            </>
           )}
 
           <section className="history">

@@ -5,6 +5,12 @@ export type Difficulty = 'casual' | 'serious';
 
 export type Phase = 'idle' | 'loading' | 'player' | 'thinking' | 'over';
 
+export interface QAItem {
+  q: string;
+  a: string;
+  at: number;
+}
+
 export interface Ply {
   uci: string;
   mover: Color;
@@ -17,4 +23,6 @@ export interface Ply {
   fenBefore?: string;
   winBefore?: number;
   winAfter?: number;
+  /** 用户对这一步的提问与规则式回答 */
+  qa?: QAItem[];
 }
