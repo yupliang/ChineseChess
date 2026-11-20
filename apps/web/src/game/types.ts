@@ -25,6 +25,10 @@ export interface Ply {
   replyPv?: string[];
   /** 对手实际走出的应着（UCI） */
   opponentMove?: string;
+  /** 对手应着之后的局面，以及引擎在这个新局面上给你的最佳着法与主变 */
+  nextFen?: string;
+  nextBest?: string;
+  nextPv?: string[];
   fenBefore?: string;
   winBefore?: number;
   winAfter?: number;

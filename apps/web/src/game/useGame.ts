@@ -99,10 +99,12 @@ export function useGame() {
       .map((m) => m.to);
   }, [position, selected, phase]);
 
-  const refreshBaseline = useCallback(async (pos: Position) => {
+  const refreshBaseline = useCallback(async (pos: Position): Promise<Baseline> => {
     const fen = toFen(pos);
     const result = await engineSearch(fen);
-    baselineRef.current = { fen, bestMove: result.bestMove, scoreCp: result.scoreCp, pv: result.pv };
+    const baseline = { fen, bestMove: result.bestMove, scoreCp: result.scoreCp, pv: result.pv };
+    baselineRef.current = baseline;
+    return baseline;
   }, []);
 
   const start = useCallback(async () => {
@@ -285,7 +287,16 @@ export function useGame() {
 
         setPhase('player');
         setStatus('你的回合（红方）');
-        await refreshBaseline(aiPos);
+        // 顺手把「对手应完之后你该怎么走」也算好，问答里的「我该怎么走」直接用它
+        const nextBaseline = await refreshBaseline(aiPos);
+        const enriched: Ply = {
+          ...withReply,
+          nextFen: nextBaseline.fen,
+          nextBest: nextBaseline.bestMove,
+          nextPv: nextBaseline.pv,
+        };
+        setCard(enriched);
+        setPlies(next.map((p) => (p === withReply ? enriched : p)));
       } catch (e) {
         setError('分析失败：' + (e instanceof Error ? e.message : String(e)));
         setPhase('player');

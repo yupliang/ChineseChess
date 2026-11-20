@@ -63,3 +63,46 @@ describe('追问：站在对手视角继续聊', () => {
     expect(answer).toContain('一个兵（100）');
   });
 });
+
+/**
+ * 红方 兵三进一 之后，黑方补中象 象3进5（c9e7）。
+ * 这一步既不吃子也不将军，教练要讲清楚意图，而不是回「引擎首选」。
+ */
+const START = 'rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1';
+const INTENT_PLY: Ply = {
+  uci: 'c3c4',
+  mover: 'red',
+  fenBefore: START,
+  tier: 'best',
+  lossPct: 0,
+  replyMove: 'c9e7',
+  opponentMove: 'c9e7',
+  // 黑方 象3进5 之后轮到红方，引擎建议 马二进三
+  nextFen: 'rn1akabnr/9/1c2b2c1/p1p1p1p1p/2P6/9/P3P1P1P/1C5C1/9/RNBAKABNR w - - 0 2',
+  nextBest: 'h0g2',
+  nextPv: ['h0g2'],
+};
+
+describe('追问：对手这步的意图', () => {
+  it('点名着法时讲补防位置，而不是「引擎首选」', () => {
+    const answer = answerQuestion(INTENT_PLY, '对方为什么象3进5？', 'blunt');
+
+    expect(answer).toContain('象3进5');
+    expect(answer).toContain('中路');
+    expect(answer).not.toContain('引擎认为这步就是首选');
+  });
+
+  it('只问某颗子想干嘛时，解释他实际那一步', () => {
+    const answer = answerQuestion(INTENT_PLY, '他为什么补象？', 'blunt');
+
+    expect(answer).toContain('象3进5');
+    expect(answer).not.toContain('走不出你说的那步');
+  });
+
+  it('问「我该怎么走」时给对手应完之后的下一步', () => {
+    const answer = answerQuestion(INTENT_PLY, '我该怎么走？', 'blunt');
+
+    expect(answer).toContain('他走 象3进5 之后');
+    expect(answer).toContain('马二进三');
+  });
+});

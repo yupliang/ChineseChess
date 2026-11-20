@@ -2,6 +2,7 @@ import {
   applyMove,
   findHangingPieces,
   generateLegalMoves,
+  generatePseudoMoves,
   HANGING_THRESHOLD,
   idx,
   isKingInCheck,
@@ -16,6 +17,9 @@ import {
   seeCapture,
   squareName,
   toFen,
+  type Color,
+  type Move,
+  type Piece,
   type Position,
   type Square,
   type Tone,
@@ -67,7 +71,7 @@ function mentionsOpponent(text: string): boolean {
   return /(他|她|对手|对方|黑方|电脑)/.test(text);
 }
 
-const PIECE_WORDS = ['炮', '马', '车', '車', '兵', '卒'] as const;
+const PIECE_WORDS = ['炮', '马', '车', '車', '兵', '卒', '象', '士', '相', '仕'] as const;
 const USER_PIECES = ['帅', '仕', '相', '兵'];
 const FOE_PIECES = ['将', '士', '象', '卒'];
 
@@ -94,6 +98,102 @@ function casualNote(difficulty?: Difficulty): string {
 /** 问句里是否在声称这步能将军 / 抽将。 */
 function claimsCheck(text: string): boolean {
   return /(将军|将一军|打将|抽将|抽|叫将)/.test(text);
+}
+
+/** 问句是不是在问对手这步的意图（为什么走 / 想干嘛 / 目的是什么）。 */
+function asksIntent(text: string): boolean {
+  return /(为什么|为啥|意图|目的|想|干嘛|干什么|图什么)/.test(text);
+}
+
+function opposite(color: Color): Color {
+  return color === 'red' ? 'black' : 'red';
+}
+
+/** 这一手在做什么：按棋子类型给一句定性。 */
+function roleOf(piece: Piece, move: Move): string {
+  const name = pieceName(piece);
+  switch (piece.type) {
+    case 'B':
+      return move.to.file === 4
+        ? `把${name}补到中路，士象防线补齐，中路不再是空档`
+        : `飞${name}调整防线，把防守加厚`;
+    case 'A':
+      return `补${name}，把将门护严`;
+    case 'N':
+      return `把${name}跳活，给车炮腾位置，同时踩住附近的要点`;
+    case 'R':
+      return move.to.file === 4 ? `${name}占中路，准备压你的将门` : `${name}占肋道，准备压线`;
+    case 'C':
+      return `调整${name}位，为架炮或换线做准备`;
+    case 'P':
+      return `把${name}往前推，抢一个立足点`;
+    default:
+      return `把${name}挪开，避开中路的压力`;
+  }
+}
+
+/** 这步之后这颗子能否打到 target（把 target 上的己方子临时换成对方子，借用走法生成器判断）。 */
+function attacksFrom(pos: Position, from: Square, piece: Piece, target: Square): boolean {
+  const probe: Position = { ...pos, board: pos.board.slice() };
+  const occupant = probe.board[idx(target)];
+  if (occupant && occupant.color === piece.color) {
+    probe.board[idx(target)] = { color: opposite(piece.color), type: occupant.type };
+  }
+  return generatePseudoMoves(probe, piece.color).some(
+    (m) => sameSquare(m.from, from) && sameSquare(m.to, target)
+  );
+}
+
+/**
+ * 用局面事实解释对手这一手的意图：补哪条防线、护住谁、盯上你哪颗子，
+ * 而不是丢一句「引擎首选，没有可挑的」。
+ * style=actual 是他实际走了这步，hypothetical 是回答「他为什么不走这步」。
+ */
+function describeIntent(
+  fenAfter: string,
+  uci: string,
+  ply: Ply,
+  style: 'actual' | 'hypothetical'
+): string {
+  let pos: Position;
+  let move: Move;
+  try {
+    pos = parseFen(fenAfter);
+    move = parseUciMove(uci);
+  } catch {
+    return '';
+  }
+  const piece = pos.board[idx(move.from)];
+  if (!piece) return '';
+  const after = applyMove(pos, move);
+  const zh = moveChineseFrom(fenAfter, uci);
+  const checks = isKingInCheck(after, after.turn);
+
+  const defended = new Set<string>();
+  const threatened = new Set<string>();
+  for (let rank = 0; rank <= 9; rank++) {
+    for (let file = 0; file <= 8; file++) {
+      const sq: Square = { file, rank };
+      if (sameSquare(sq, move.to)) continue;
+      const target = after.board[idx(sq)];
+      if (!target) continue;
+      if (!attacksFrom(after, move.to, piece, sq)) continue;
+      if (target.color === piece.color) {
+        // 同种子互保（象护象）没什么信息量，不提
+        if (target.type !== piece.type) defended.add(pieceName(target));
+      } else {
+        threatened.add(pieceName(target));
+      }
+    }
+  }
+
+  const head = style === 'actual' ? `他走 ${zh}，` : `${zh} 这步，`;
+  const parts = [`${head}${roleOf(piece, move)}。`];
+  if (defended.size > 0) parts.push(`顺带还护着自己的${[...defended].join('、')}。`);
+  if (threatened.size > 0) parts.push(`下一步盯着你的${[...threatened].join('、')}。`);
+  if (checks) parts.push('这步还带将军。');
+  if (ply.replyMove === uci) parts.push('引擎也把他这步列为首选。');
+  return parts.join('');
 }
 
 /** 同一着法之前问过没有：问过就不再重念「你说的是 X 吧」。 */
@@ -190,6 +290,12 @@ function explainOpponentMove(
 
   const who = piece ? pieceName(piece) : '子';
   const checkNote = checks ? `不过它确实带将军，${checkVerdict(after, move.to)}` : '';
+  if (!checks) {
+    // 安静的一手：别只说「挪了个位置」，讲清楚它补了什么、盯上了谁
+    const isActual = ply.opponentMove === uci;
+    const intent = describeIntent(fenAfter, uci, ply, isActual ? 'actual' : 'hypothetical');
+    return `${intent}${isActual ? '' : tail}`;
+  }
   return `${opener}只是把${who}挪了个位置，吃不到你的子，谈不上白得。${checkNote}${tail}`;
 }
 
@@ -204,6 +310,16 @@ function explainOpponentPiece(
   const pos = parseFen(fenAfter);
   const foe = pos.turn;
   if (pieceSide(word, question) === 'theirs') {
+    // 问的是对手自己的子想干嘛：解释他实际那一步的意图，而不是「这步走不出来」
+    const asksCapture = /(吃|捉|抓|送|丢|白得|白吃)/.test(question);
+    if (!asksCapture && ply.opponentMove) {
+      const actual = parseUciMove(ply.opponentMove);
+      const moved = pos.board[idx(actual.from)];
+      if (moved && pieceName(moved) === word) {
+        return describeIntent(fenAfter, ply.opponentMove, ply, 'actual');
+      }
+      return `他实际走的是 ${moveChineseFrom(fenAfter, ply.opponentMove)}，动的不是${word}。`;
+    }
     const foeName = foe === 'black' ? '黑方' : '红方';
     return `这个局面里${foeName}的${word}走不出你说的那步：那条路线被挡或不合规则，不是他不想走。`;
   }
@@ -462,10 +578,24 @@ export function softWhyExplain(ply: Ply, tone: Tone = 'plain'): string {
   return `${consequenceOf(ply, tone)}，${verdict}${advice}。`;
 }
 
-type Intent = 'why' | 'correct' | 'loss' | null;
+type Intent = 'next' | 'why' | 'correct' | 'loss' | null;
 
 /** 意图识别：顺序即优先级，长且具体的模式必须排在短模式之前，避免被误吞。 */
 const INTENT_RULES: { intent: Exclude<Intent, null>; patterns: RegExp[] }[] = [
+  {
+    // 「我该怎么走」问的是对手应完之后你的下一步，必须排在「怎么走」之前
+    intent: 'next',
+    patterns: [
+      /怎么应对/,
+      /如何应对/,
+      /我该怎么/,
+      /我下一步/,
+      /接下来我/,
+      /下一步.{0,2}怎么走/,
+      /下一步.{0,2}走什么/,
+      /现在.{0,2}怎么走/,
+    ],
+  },
   {
     intent: 'correct',
     patterns: [/正确走法/, /正确走/, /应该走/, /该走/, /怎么走/, /走什么好/, /最佳/, /推荐/],
@@ -500,9 +630,30 @@ export function answerQuestion(
   if (claims) return claims;
   const opponent = answerOpponent(ply, question, tone, difficulty);
   if (opponent) return opponent;
+  // 问对手的意图但没点名具体着法：按他实际那一步讲，不要回答成「你走的这步没有战术问题」
+  if (ply.mover === 'red' && mentionsOpponent(question) && asksIntent(question)) {
+    const fenAfter = fenAfterOf(ply);
+    if (fenAfter && ply.opponentMove) {
+      return describeIntent(fenAfter, ply.opponentMove, ply, 'actual');
+    }
+  }
   if (ply.mover !== 'red') return FALLBACK;
 
   switch (classifyIntent(question)) {
+    case 'next': {
+      if (!ply.nextBest || !ply.nextFen) {
+        return '他还没应这一手，等这步走完，我再告诉你新局面下该怎么下。';
+      }
+      const bestZh = moveChineseFrom(ply.nextFen, ply.nextBest);
+      const line = ply.nextPv ? pvChineseFrom(ply.nextFen, ply.nextPv.slice(0, 3)) : [];
+      const tail = followOf(line);
+      const fenAfter = fenAfterOf(ply) ?? undefined;
+      const actualZh = ply.opponentMove ? moveChineseFrom(fenAfter, ply.opponentMove) : null;
+      const head = actualZh ? `他走 ${actualZh} 之后，` : '这是新的一手，';
+      return tone === 'blunt'
+        ? `${head}你该走 ${bestZh}${tail}。`
+        : `${head}引擎建议你走 ${bestZh}${tail}。`;
+    }
     case 'why':
       if (!ply.facts || ply.facts.length === 0) {
         return softWhyExplain(ply, tone);
@@ -530,4 +681,10 @@ export function answerQuestion(
 }
 
 /** 预设快捷问题：双轨匹配的按钮端。 */
-export const PRESET_QUESTIONS = ['这步为什么臭？', '正确走法是什么？', '这步掉了多少？'] as const;
+export const PRESET_QUESTIONS = [
+  '这步为什么臭？',
+  '正确走法是什么？',
+  '这步掉了多少？',
+  '对手这步想干嘛？',
+  '我该怎么走？',
+] as const;
