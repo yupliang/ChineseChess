@@ -154,6 +154,14 @@ export default function App() {
           >
             {game.difficulty === 'casual' ? '难度：陪练' : '难度：认真'}
           </button>
+          <button
+            data-testid="opponent-mode"
+            disabled={!started || game.phase === 'loading'}
+            onClick={game.toggleOpponentMode}
+            title="选择轮到对手时由电脑走，还是你自己替他走"
+          >
+            {game.manualOpponent ? '对手：我来走' : '对手：电脑走'}
+          </button>
           <button data-testid="tone" onClick={() => setTone(tone === 'blunt' ? 'plain' : 'blunt')}>
             {tone === 'blunt' ? '语气：毒舌' : '语气：正经'}
           </button>
@@ -268,7 +276,7 @@ export default function App() {
             )}
           </section>
 
-          {import.meta.env.DEV && game.phase === 'player' && (
+          {import.meta.env.DEV && game.myTurn && (
             <button data-testid="dev-move" className="dev" onClick={() => game.devAutoMove()}>
               自动走一步（开发用）
             </button>

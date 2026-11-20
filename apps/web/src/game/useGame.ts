@@ -92,6 +92,9 @@ export function useGame() {
   const [result, setResult] = useState('');
   const [savedPlies, setSavedPlies] = useState<Ply[] | null>(() => loadCurrent());
   const [playerColor, setPlayerColor] = useState<Color>(() => loadSide());
+  const [manualOpponent, setManualOpponent] = useState(false);
+  const opponentColor: Color = playerColor === 'red' ? 'black' : 'red';
+  const label = sideLabel(playerColor);
 
   const baselineRef = useRef<Baseline | null>(null);
   const busyRef = useRef(false);
@@ -205,8 +208,11 @@ export function useGame() {
       const lastMine = [...savedPlies].reverse().find((p) => p.mover === color) ?? null;
       setCard(lastMine);
       setSavedPlies(null);
+      // 存档正好停在对手该走的那一步：交给你替他走，或点按钮让电脑接手
+      const myTurnNow = pos.turn === color;
+      setManualOpponent(!myTurnNow);
       setPhase('player');
-      setStatus(`你的回合（${label}）`);
+      setStatus(myTurnNow ? `你的回合（${label}）` : '对手的回合（你来替他走）');
       await refreshBaseline(pos);
     } catch (e) {
       setError('恢复失败：' + (e instanceof Error ? e.message : String(e)));
@@ -216,12 +222,46 @@ export function useGame() {
     }
   }, [savedPlies, refreshBaseline]);
 
+  /** 电脑替对手走一步，并把局面推进到你的回合。 */
+  const autoPlayOpponent = useCallback(
+    async (pos: Position, currentPlies: Ply[]) => {
+      setStatus('对手正在思考…');
+      await sleep(AI_REPLY_PAUSE_MS);
+      const uci = await chooseEngineMove(pos);
+      const move = parseUciMove(uci);
+      const after = applyMove(pos, move);
+      const next: Ply[] = [...currentPlies, { uci, mover: opponentColor }];
+      setSelected(null);
+      setPosition(after);
+      setLastMove({ from: move.from, to: move.to });
+      setPlies(next);
+
+      const history = buildHistory(next);
+      const end = judgeGameEnd(
+        history.positions[history.positions.length - 1],
+        history.positions,
+        history.checks
+      );
+      if (end.over) {
+        setPhase('over');
+        setResult(endMessage(end, playerColor));
+        setStatus(endMessage(end, playerColor));
+        saveFinished(next);
+        return { uci, after, plies: next, base: null, over: true as const };
+      }
+
+      setPhase('player');
+      setStatus(`你的回合（${label}）`);
+      const base = await refreshBaseline(after);
+      return { uci, after, plies: next, base, over: false as const };
+    },
+    [chooseEngineMove, label, opponentColor, playerColor, refreshBaseline]
+  );
+
   const playMine = useCallback(
     async (move: Move, currentPosition: Position, currentPlies: Ply[]) => {
       const fenBefore = toFen(currentPosition);
       const uci = squareName(move.from) + squareName(move.to);
-      const label = sideLabel(playerColor);
-      const foeColor: Color = playerColor === 'red' ? 'black' : 'red';
 
       let staticFacts: Fact[] = [];
       try {
@@ -295,54 +335,33 @@ export function useGame() {
           return;
         }
 
-        // 对手按难度走棋（陪练会漏战术，认真接近全力）；先停顿一下别秒回
-        setStatus('对手正在思考…');
-        await sleep(AI_REPLY_PAUSE_MS);
-        const aiUci = await chooseEngineMove(myPos);
-        const aiMove = parseUciMove(aiUci);
-        const aiPos = applyMove(myPos, aiMove);
-        const withReply: Ply = { ...ply, opponentMove: aiUci };
-        const next: Ply[] = [...currentPlies, withReply, { uci: aiUci, mover: foeColor }];
-        setCard(withReply);
-
-        setPosition(aiPos);
-        setLastMove({ from: aiMove.from, to: aiMove.to });
-        setPlies(next);
-
-        const both = buildHistory(next);
-        const endAfterAi = judgeGameEnd(
-          both.positions[both.positions.length - 1],
-          both.positions,
-          both.checks
-        );
-
-        if (endAfterAi.over) {
-          setPhase('over');
-          setResult(endMessage(endAfterAi, playerColor));
-          setStatus(endMessage(endAfterAi, playerColor));
-          saveFinished(next);
+        // 你自己替对手走：先停在这里，等你落子
+        if (manualOpponent) {
+          setPlies(myPlies);
+          setPhase('player');
+          setStatus('对手的回合（你来替他走）');
           return;
         }
 
-        setPhase('player');
-        setStatus(`你的回合（${label}）`);
+        const reply = await autoPlayOpponent(myPos, myPlies);
+        if (reply.over || !reply.base) return;
         // 顺手把「对手应完之后你该怎么走」也算好，问答里的「我该怎么走」直接用它
-        const nextBaseline = await refreshBaseline(aiPos);
         const enriched: Ply = {
-          ...withReply,
-          nextFen: nextBaseline.fen,
-          nextBest: nextBaseline.bestMove,
-          nextPv: nextBaseline.pv,
+          ...ply,
+          opponentMove: reply.uci,
+          nextFen: reply.base.fen,
+          nextBest: reply.base.bestMove,
+          nextPv: reply.base.pv,
         };
         setCard(enriched);
-        setPlies(next.map((p) => (p === withReply ? enriched : p)));
+        setPlies(reply.plies.map((p) => (p === ply ? enriched : p)));
       } catch (e) {
         setError('分析失败：' + (e instanceof Error ? e.message : String(e)));
         setPhase('player');
         setStatus(`你的回合（${label}）`);
       }
     },
-    [chooseEngineMove, difficulty, playerColor, refreshBaseline]
+    [autoPlayOpponent, label, manualOpponent, playerColor]
   );
 
   const playMove = useCallback(
@@ -355,6 +374,74 @@ export function useGame() {
     },
     [phase, position, plies, playMine]
   );
+
+  /** 你替对手走这一步：不分析，只推进局面，并把你上一手的卡片补全。 */
+  const playOpponentManually = useCallback(
+    async (move: Move, currentPosition: Position, currentPlies: Ply[], cardPly: Ply | null) => {
+      const uci = squareName(move.from) + squareName(move.to);
+      const after = applyMove(currentPosition, move);
+      const next: Ply[] = [...currentPlies, { uci, mover: opponentColor }];
+      setSelected(null);
+      setPosition(after);
+      setLastMove({ from: move.from, to: move.to });
+      setPlies(next);
+
+      const history = buildHistory(next);
+      const end = judgeGameEnd(
+        history.positions[history.positions.length - 1],
+        history.positions,
+        history.checks
+      );
+      if (end.over) {
+        setPhase('over');
+        setResult(endMessage(end, playerColor));
+        setStatus(endMessage(end, playerColor));
+        saveFinished(next);
+        return;
+      }
+
+      setPhase('player');
+      setStatus(`你的回合（${label}）`);
+      const base = await refreshBaseline(after);
+      if (cardPly) {
+        const enriched: Ply = {
+          ...cardPly,
+          opponentMove: uci,
+          nextFen: base.fen,
+          nextBest: base.bestMove,
+          nextPv: base.pv,
+        };
+        setCard(enriched);
+        setPlies(next.map((p) => (p === cardPly ? enriched : p)));
+      }
+    },
+    [label, opponentColor, playerColor, refreshBaseline]
+  );
+
+  /** 切换「对手由电脑走 / 由我来走」；切回电脑时若正等着应着，立刻接手。 */
+  const toggleOpponentMode = useCallback(() => {
+    const next = !manualOpponent;
+    setManualOpponent(next);
+    if (next || phase !== 'player' || position.turn === playerColor || busyRef.current) return;
+    busyRef.current = true;
+    void autoPlayOpponent(position, plies)
+      .then((reply) => {
+        if (reply.over || !reply.base || !card) return;
+        const enriched: Ply = {
+          ...card,
+          opponentMove: reply.uci,
+          nextFen: reply.base.fen,
+          nextBest: reply.base.bestMove,
+          nextPv: reply.base.pv,
+        };
+        setCard(enriched);
+        setPlies(reply.plies.map((p) => (p === card ? enriched : p)));
+      })
+      .catch((e) => setError('对手走棋失败：' + (e instanceof Error ? e.message : String(e))))
+      .finally(() => {
+        busyRef.current = false;
+      });
+  }, [autoPlayOpponent, card, manualOpponent, phase, playerColor, plies, position]);
 
   /** 开发用：让引擎按当前难度档替你走一步，非法或失败时退回首合法走法。 */
   const devAutoMove = useCallback(() => {
@@ -379,24 +466,33 @@ export function useGame() {
   const onSquareClick = useCallback(
     (sq: Square) => {
       if (phase !== 'player' || busyRef.current) return;
+      const myTurn = position.turn === playerColor;
+      const playingForOpponent = manualOpponent && !myTurn;
 
       if (selected) {
         const moves = generateLegalMoves(position).filter((m) => sameSquare(m.from, selected));
         const target = moves.find((m) => sameSquare(m.to, sq));
         if (target) {
-          playMove(target);
+          if (myTurn) {
+            playMove(target);
+          } else if (playingForOpponent) {
+            busyRef.current = true;
+            void playOpponentManually(target, position, plies, card).finally(() => {
+              busyRef.current = false;
+            });
+          }
           return;
         }
       }
 
       const piece = pieceAt(position, sq);
-      if (piece && piece.color === playerColor) {
+      if (piece && piece.color === (playingForOpponent ? position.turn : playerColor)) {
         setSelected(sq);
         return;
       }
       setSelected(null);
     },
-    [phase, position, selected, playMove, playerColor]
+    [phase, position, selected, playMove, playOpponentManually, playerColor, manualOpponent, plies, card]
   );
 
   /** 给某一步追加一条问答，随 Ply 一起持久化。 */
@@ -466,6 +562,9 @@ export function useGame() {
     result,
     savedPlies,
     playerColor,
+    manualOpponent,
+    toggleOpponentMode,
+    myTurn: phase === 'player' && position.turn === playerColor,
     start,
     resume,
     undo,
