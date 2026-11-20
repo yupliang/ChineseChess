@@ -104,5 +104,7 @@ describe('追问：对手这步的意图', () => {
 
     expect(answer).toContain('他走 象3进5 之后');
     expect(answer).toContain('马二进三');
+    // 必须讲原因，而不是只丢一个着法
+    expect(answer).toContain('因为');
   });
 });

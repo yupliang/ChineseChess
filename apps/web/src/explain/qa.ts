@@ -120,7 +120,7 @@ function roleOf(piece: Piece, move: Move): string {
     case 'A':
       return `补${name}，把将门护严`;
     case 'N':
-      return `把${name}跳活，给车炮腾位置，同时踩住附近的要点`;
+      return `把${name}跳出来，打开车路，也控制住河沿的要道`;
     case 'R':
       return move.to.file === 4 ? `${name}占中路，准备压你的将门` : `${name}占肋道，准备压线`;
     case 'C':
@@ -142,6 +142,31 @@ function attacksFrom(pos: Position, from: Square, piece: Piece, target: Square):
   return generatePseudoMoves(probe, piece.color).some(
     (m) => sameSquare(m.from, from) && sameSquare(m.to, target)
   );
+}
+
+/** 这颗子落在 from 之后能护住谁、能盯上谁（同种子互保没什么信息量，不算护）。 */
+function coverageOf(
+  pos: Position,
+  from: Square,
+  piece: Piece
+): { defended: string[]; threatened: string[] } {
+  const defended = new Set<string>();
+  const threatened = new Set<string>();
+  for (let rank = 0; rank <= 9; rank++) {
+    for (let file = 0; file <= 8; file++) {
+      const sq: Square = { file, rank };
+      if (sameSquare(sq, from)) continue;
+      const target = pos.board[idx(sq)];
+      if (!target) continue;
+      if (!attacksFrom(pos, from, piece, sq)) continue;
+      if (target.color === piece.color) {
+        if (target.type !== piece.type) defended.add(pieceName(target));
+      } else {
+        threatened.add(pieceName(target));
+      }
+    }
+  }
+  return { defended: [...defended], threatened: [...threatened] };
 }
 
 /**
@@ -168,32 +193,84 @@ function describeIntent(
   const after = applyMove(pos, move);
   const zh = moveChineseFrom(fenAfter, uci);
   const checks = isKingInCheck(after, after.turn);
-
-  const defended = new Set<string>();
-  const threatened = new Set<string>();
-  for (let rank = 0; rank <= 9; rank++) {
-    for (let file = 0; file <= 8; file++) {
-      const sq: Square = { file, rank };
-      if (sameSquare(sq, move.to)) continue;
-      const target = after.board[idx(sq)];
-      if (!target) continue;
-      if (!attacksFrom(after, move.to, piece, sq)) continue;
-      if (target.color === piece.color) {
-        // 同种子互保（象护象）没什么信息量，不提
-        if (target.type !== piece.type) defended.add(pieceName(target));
-      } else {
-        threatened.add(pieceName(target));
-      }
-    }
-  }
+  const { defended, threatened } = coverageOf(after, move.to, piece);
 
   const head = style === 'actual' ? `他走 ${zh}，` : `${zh} 这步，`;
   const parts = [`${head}${roleOf(piece, move)}。`];
-  if (defended.size > 0) parts.push(`顺带还护着自己的${[...defended].join('、')}。`);
-  if (threatened.size > 0) parts.push(`下一步盯着你的${[...threatened].join('、')}。`);
+  if (defended.length > 0) parts.push(`顺带还护着自己的${defended.join('、')}。`);
+  if (threatened.length > 0) parts.push(`下一步盯着你的${threatened.join('、')}。`);
   if (checks) parts.push('这步还带将军。');
   if (ply.replyMove === uci) parts.push('引擎也把他这步列为首选。');
   return parts.join('');
+}
+
+/**
+ * 「为什么推荐这步」：吃子 > 躲开白吃 > 将军 > 走完能白吃 > 护住被盯的子 > 出子占位。
+ * 全部来自局面事实，答不上来时返回 null。
+ */
+function whyRecommended(fen: string, uci: string): string | null {
+  let pos: Position;
+  let move: Move;
+  try {
+    pos = parseFen(fen);
+    move = parseUciMove(uci);
+  } catch {
+    return null;
+  }
+  const piece = pos.board[idx(move.from)];
+  if (!piece) return null;
+  const after = applyMove(pos, move);
+  const foe = opposite(piece.color);
+  const target = pos.board[idx(move.to)];
+  const reasons: string[] = [];
+
+  if (target && target.color === foe) {
+    const gain = seeCapture(pos, move);
+    const taken = pieceName(target);
+    reasons.push(
+      gain >= HANGING_THRESHOLD
+        ? `能白吃他的${taken}，净赚约 ${gain}`
+        : gain > 0
+          ? `兑掉他的${taken}，一进一出还净赚 ${gain}`
+          : gain === 0
+            ? `兑掉他的${taken}，子力对等，不亏`
+            : `吃掉他的${taken}，虽然会被吃回，但换得动`
+    );
+  }
+
+  if (
+    !(target && target.color === foe) &&
+    findHangingPieces(pos, foe).some((h) => sameSquare(h.square, move.from))
+  ) {
+    reasons.push(`你这颗${pieceName(piece)}正被他白吃，先挪开`);
+  }
+
+  if (isKingInCheck(after, after.turn)) reasons.push('走完直接将军，逼他先应付');
+
+  const wins = findHangingPieces(after, piece.color);
+  if (wins.length > 0) {
+    const names = [...new Set(wins.map((h) => pieceName(h.piece)))].slice(0, 2);
+    reasons.push(`走完就能白吃他的${names.join('、')}`);
+  }
+
+  const saved = findHangingPieces(pos, foe).filter((h) => {
+    const own = after.board[idx(h.square)];
+    return !!own && own.color === piece.color && attacksFrom(after, move.to, piece, h.square);
+  });
+  if (saved.length > 0) {
+    reasons.push(`护住了你正被他惦记的${pieceName(saved[0].piece)}`);
+  }
+
+  if (reasons.length === 0) {
+    const cover = coverageOf(after, move.to, piece);
+    if (cover.threatened.length > 0) {
+      const names = [...new Set(cover.threatened)].slice(0, 2);
+      reasons.push(`这颗${pieceName(piece)}能盯住他的${names.join('、')}`);
+    }
+  }
+
+  if (reasons.length === 0) reasons.push(roleOf(piece, move));
+  return reasons.slice(0, 2).join('，');
 }
 
 /** 同一着法之前问过没有：问过就不再重念「你说的是 X 吧」。 */
@@ -647,12 +724,14 @@ export function answerQuestion(
       const bestZh = moveChineseFrom(ply.nextFen, ply.nextBest);
       const line = ply.nextPv ? pvChineseFrom(ply.nextFen, ply.nextPv.slice(0, 3)) : [];
       const tail = followOf(line);
+      const why = whyRecommended(ply.nextFen, ply.nextBest);
+      const reason = why ? `，因为${why}` : '';
       const fenAfter = fenAfterOf(ply) ?? undefined;
       const actualZh = ply.opponentMove ? moveChineseFrom(fenAfter, ply.opponentMove) : null;
       const head = actualZh ? `他走 ${actualZh} 之后，` : '这是新的一手，';
       return tone === 'blunt'
-        ? `${head}你该走 ${bestZh}${tail}。`
-        : `${head}引擎建议你走 ${bestZh}${tail}。`;
+        ? `${head}你该走 ${bestZh}${reason}${tail}。`
+        : `${head}引擎建议你走 ${bestZh}${reason}${tail}。`;
     }
     case 'why':
       if (!ply.facts || ply.facts.length === 0) {
