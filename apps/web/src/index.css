@@ -142,6 +142,25 @@ body {
   border-style: dashed;
 }
 
+/* 走子滑动：起点偏移由内联 CSS 变量给出，挂载时播一次 */
+@keyframes piece-slide {
+  from {
+    transform: translate(var(--slide-dx, 0px), var(--slide-dy, 0px));
+  }
+  to {
+    transform: translate(0px, 0px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  @keyframes piece-slide {
+    from,
+    to {
+      transform: translate(0px, 0px);
+    }
+  }
+}
+
 .result {
   background: #fff8e1;
   border: 1px solid #e6cf9a;

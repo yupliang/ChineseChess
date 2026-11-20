@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { pieceName, squareName, type Piece, type Position, type Square } from '@cc/rules';
 
 const CELL = 54;
@@ -21,11 +22,19 @@ export interface ChessboardProps {
   onSquareClick?: (sq: Square) => void;
 }
 
-function PieceView({ piece, sq }: { piece: Piece; sq: Square }) {
+function PieceView({ piece, sq, from }: { piece: Piece; sq: Square; from?: Square }) {
   const red = piece.color === 'red';
   const ink = red ? '#b3261e' : '#262626';
+  // 刚走过的那颗子从起点滑到终点：靠 CSS animation 在每个新走法挂载时播一次
+  const slide = from
+    ? ({
+        animation: 'piece-slide 200ms cubic-bezier(0.25, 0.8, 0.3, 1)',
+        '--slide-dx': `${px(from.file) - px(sq.file)}px`,
+        '--slide-dy': `${py(from.rank) - py(sq.rank)}px`,
+      } as CSSProperties)
+    : undefined;
   return (
-    <g pointerEvents="none">
+    <g pointerEvents="none" style={slide}>
       <circle cx={px(sq.file)} cy={py(sq.rank)} r={23} fill="#fdf3d8" stroke={ink} strokeWidth={2.5} />
       <circle
         cx={px(sq.file)}
@@ -210,9 +219,18 @@ export function Chessboard({
         );
       })}
 
-      {pieces.map(({ piece, sq }) => (
-        <PieceView key={`${sq.file}-${sq.rank}`} piece={piece} sq={sq} />
-      ))}
+      {pieces.map(({ piece, sq }) => {
+        // 终点那颗子每次走法变化都换 key，触发一次滑入动画
+        const moved =
+          !!lastMove &&
+          lastMove.to.file === sq.file &&
+          lastMove.to.rank === sq.rank &&
+          (lastMove.from.file !== sq.file || lastMove.from.rank !== sq.rank);
+        const key = moved
+          ? `${sq.file}-${sq.rank}@${lastMove!.from.file}${lastMove!.from.rank}`
+          : `${sq.file}-${sq.rank}`;
+        return <PieceView key={key} piece={piece} sq={sq} from={moved ? lastMove!.from : undefined} />;
+      })}
 
       {/* 选中 */}
       {selected && (
