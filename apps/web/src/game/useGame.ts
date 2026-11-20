@@ -222,6 +222,8 @@ export function useGame() {
           facts,
           bestMove: baseline.bestMove,
           pv: baseline.pv,
+          replyMove: analysis.bestMove,
+          replyPv: analysis.pv,
           fenBefore,
           winBefore,
           winAfter,

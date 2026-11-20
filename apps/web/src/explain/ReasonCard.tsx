@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import { parseSquare, renderFacts, type Fact, type Square, type Tone } from '@cc/rules';
 import { moveChineseFrom, pvChineseFrom } from '../game/pv';
+import { describeDownside } from './qa';
 import { TIER_META } from './winrate';
 import type { Ply } from '../game/types';
 
@@ -34,8 +35,9 @@ export function ReasonCard({
   const meta = TIER_META[tier];
   const facts = ply.facts ?? [];
   const sentences = renderFacts(facts, tone, ply.mover);
-  const betterMove =
-    ply.bestMove && ply.bestMove !== ply.uci && facts.length > 0 ? ply.bestMove : null;
+  // 没有硬事实时，仍给亏得明显的棋展示引擎推荐与预演
+  const showBetter = facts.length > 0 || (ply.lossPct ?? 0) >= 5;
+  const betterMove = ply.bestMove && ply.bestMove !== ply.uci && showBetter ? ply.bestMove : null;
 
   return (
     <section
@@ -105,11 +107,7 @@ export function ReasonCard({
           })}
         </ul>
       ) : (
-        <p style={{ margin: '0 0 10px', color: '#555' }}>
-          {tier === 'best' || tier === 'normal'
-            ? '这步没什么可挑的，继续。'
-            : '这一步整体偏亏，但没有找到单一明确的战术原因。'}
-        </p>
+        <p style={{ margin: '0 0 10px', color: '#555' }}>{describeDownside(ply, tone)}</p>
       )}
 
       {betterMove && (

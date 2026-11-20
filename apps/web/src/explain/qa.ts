@@ -1,6 +1,88 @@
-import { renderFacts, type Tone } from '@cc/rules';
+import {
+  applyMove,
+  parseFen,
+  parseUciMove,
+  renderFacts,
+  toFen,
+  type Tone,
+} from '@cc/rules';
 import { moveChineseFrom, pvChineseFrom } from '../game/pv';
 import type { Ply } from '../game/types';
+
+/** 走完这一手之后的局面 FEN；局面或着法异常时返回 null。 */
+function fenAfterOf(ply: Ply): string | null {
+  if (!ply.fenBefore) return null;
+  try {
+    return toFen(applyMove(parseFen(ply.fenBefore), parseUciMove(ply.uci)));
+  } catch {
+    return null;
+  }
+}
+
+/** 把一串着法转成「，接着 a b」形式的后缀（首步已在主句里说过）。 */
+function followOf(moves: string[]): string {
+  const rest = moves.slice(1);
+  return rest.length > 0 ? `，接着 ${rest.join(' ')}` : '';
+}
+
+/**
+ * 规则层没抓到硬伤时的解释，拆成两个出口：
+ * - describeDownside：卡片正文用，只讲后果（胜率、推荐走法卡片上另有展示）
+ * - softWhyExplain：问答用，后果 + 胜率损失 + 引擎更想要的走法
+ */
+
+/** 「你走了 X，之后对手可以应 Y，接着 …」：用对手应着说明这一步的后果。 */
+function consequenceOf(ply: Ply, tone: Tone): string {
+  const mine = moveChineseFrom(ply.fenBefore, ply.uci);
+  const afterFen = fenAfterOf(ply);
+  const replyZh = afterFen && ply.replyMove ? moveChineseFrom(afterFen, ply.replyMove) : null;
+  const replyLine = afterFen && ply.replyPv ? pvChineseFrom(afterFen, ply.replyPv.slice(0, 3)) : [];
+
+  if (replyZh) {
+    return tone === 'blunt'
+      ? `你走 ${mine} 之后，对手可以直接 ${replyZh}${followOf(replyLine)}`
+      : `你走了 ${mine}，之后对手可以应 ${replyZh}${followOf(replyLine)}`;
+  }
+  return tone === 'blunt'
+    ? `你走了 ${mine}，问题出在子力位置和攻守节奏上`
+    : `你走了 ${mine}，这更像子力位置与攻守节奏上的亏损`;
+}
+
+/** 卡片正文：只讲后果。 */
+export function describeDownside(ply: Ply, tone: Tone = 'plain'): string {
+  if (ply.tier === 'best' || (ply.lossPct ?? 0) < 5) {
+    return tone === 'blunt' ? '这步没什么可挑的，继续。' : '这一步没有明显的战术问题，正常继续就好。';
+  }
+  return consequenceOf(ply, tone);
+}
+
+/** 问答：后果 + 胜率损失 + 引擎更想要的走法。 */
+export function softWhyExplain(ply: Ply, tone: Tone = 'plain'): string {
+  if (ply.tier === 'best') return '引擎认为这步就是首选，没有可挑的战术问题。';
+
+  const lossValue = ply.lossPct ?? 0;
+  const mine = moveChineseFrom(ply.fenBefore, ply.uci);
+  if (lossValue < 5) {
+    return tone === 'blunt'
+      ? `这步 ${mine} 和引擎首选几乎等价，没有明显弊端。`
+      : `这步 ${mine} 与引擎首选差别很小，没有明显的战术问题。`;
+  }
+
+  const loss = lossValue.toFixed(1);
+  const verdict =
+    tone === 'blunt'
+      ? `这步大约亏了 ${loss}% 胜率`
+      : `这一步大约损失了 ${loss}% 的胜率`;
+  const bestZh = ply.bestMove ? moveChineseFrom(ply.fenBefore, ply.bestMove) : null;
+  const bestLine = ply.pv ? pvChineseFrom(ply.fenBefore, ply.pv.slice(0, 3)) : [];
+  const advice = bestZh
+    ? tone === 'blunt'
+      ? `；引擎更想让你走 ${bestZh}${followOf(bestLine)}`
+      : `；引擎更推荐的走法是 ${bestZh}${followOf(bestLine)}`
+    : '';
+
+  return `${consequenceOf(ply, tone)}，${verdict}${advice}。`;
+}
 
 type Intent = 'why' | 'correct' | 'loss' | null;
 
@@ -35,9 +117,7 @@ export function answerQuestion(ply: Ply, question: string, tone: Tone = 'plain')
   switch (classifyIntent(question)) {
     case 'why':
       if (!ply.facts || ply.facts.length === 0) {
-        return ply.tier === 'best'
-          ? '引擎认为这步就是首选，没有可挑的战术问题。'
-          : '这步整体偏亏，但找不到单一明确的战术原因。';
+        return softWhyExplain(ply, tone);
       }
       return renderFacts(ply.facts, tone, ply.mover).join('');
     case 'correct': {

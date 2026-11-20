@@ -20,6 +20,9 @@ export interface Ply {
   facts?: Fact[];
   bestMove?: string;
   pv?: string[];
+  /** 你走完之后，引擎给出的对手最佳应着与后续主变（UCI） */
+  replyMove?: string;
+  replyPv?: string[];
   fenBefore?: string;
   winBefore?: number;
   winAfter?: number;
