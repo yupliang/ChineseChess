@@ -1,13 +1,20 @@
 import {
   applyMove,
+  findHangingPieces,
+  HANGING_THRESHOLD,
+  idx,
+  parseChineseMove,
   parseFen,
   parseUciMove,
+  pieceName,
   renderFacts,
+  seeCapture,
+  squareName,
   toFen,
   type Tone,
 } from '@cc/rules';
 import { moveChineseFrom, pvChineseFrom } from '../game/pv';
-import type { Ply } from '../game/types';
+import type { Difficulty, Ply } from '../game/types';
 
 /** 走完这一手之后的局面 FEN；局面或着法异常时返回 null。 */
 function fenAfterOf(ply: Ply): string | null {
@@ -46,6 +53,128 @@ function consequenceOf(ply: Ply, tone: Tone): string {
   return tone === 'blunt'
     ? `你走了 ${mine}，问题出在子力位置和攻守节奏上`
     : `你走了 ${mine}，这更像子力位置与攻守节奏上的亏损`;
+}
+
+/** 问句里是否在问对手（他/对手/黑方…）。 */
+function mentionsOpponent(text: string): boolean {
+  return /(他|她|对手|对方|黑方|电脑)/.test(text);
+}
+
+const PIECE_WORDS = ['炮', '马', '车', '車', '兵', '卒'] as const;
+const USER_PIECES = ['帅', '仕', '相', '兵'];
+const FOE_PIECES = ['将', '士', '象', '卒'];
+
+/** 问句里提到的棋子名，统一成规则层的叫法（車 -> 车）。 */
+function pieceWordOf(text: string): string | null {
+  const hit = PIECE_WORDS.find((w) => text.includes(w));
+  return hit ? hit.replace('車', '车') : null;
+}
+
+/** 这个棋子说的是「你的子」还是「对手的子」：帅仕相兵是你的，将士象卒是对手的，车马炮看上下文。 */
+function pieceSide(word: string, text: string): 'mine' | 'theirs' {
+  if (USER_PIECES.includes(word)) return 'mine';
+  if (FOE_PIECES.includes(word)) return 'theirs';
+  return /吃|白送|白得|白吃|丢|送/.test(text) ? 'mine' : 'theirs';
+}
+
+/** 陪练档会刻意漏战术，解释对手「为什么没吃」时必须点明。 */
+function casualNote(difficulty?: Difficulty): string {
+  return difficulty === 'casual'
+    ? '另外，陪练档会刻意漏着，这种白送的子它经常不吃，别把它的选择当成安全。'
+    : '';
+}
+
+/** 「他为什么不 X」：先校验前提（这步能不能吃到），再解释为什么不吃 / 该不该挪。 */
+function explainOpponentMove(
+  fenAfter: string,
+  uci: string,
+  ply: Ply,
+  tone: Tone,
+  difficulty?: Difficulty
+): string {
+  const pos = parseFen(fenAfter);
+  const move = parseUciMove(uci);
+  const zh = moveChineseFrom(fenAfter, uci);
+  const moverPiece = pos.board[idx(move.from)];
+  const target = pos.board[idx(move.to)];
+  const lead =
+    tone === 'blunt' ? `我按你说的 ${zh} 来理解。` : `我按你提到的 ${zh} 这一步来理解。`;
+  const engineZh = ply.replyMove ? moveChineseFrom(fenAfter, ply.replyMove) : null;
+  const actualZh = ply.opponentMove ? moveChineseFrom(fenAfter, ply.opponentMove) : null;
+  const engine = engineZh ? `引擎给对手选的是 ${engineZh}。` : '';
+  const actual = actualZh && actualZh !== engineZh ? `他实际走的是 ${actualZh}。` : '';
+
+  if (target && target.type !== 'K') {
+    const gain = seeCapture(pos, move);
+    if (gain >= HANGING_THRESHOLD) {
+      return `${lead}这一步确实能白吃你的${pieceName(
+        target
+      )}，净赚约 ${gain}。${engine}${actual}${casualNote(
+        difficulty
+      )}你的${pieceName(target)}没人保护，应该先挪开或补一手保护。`;
+    }
+    if (gain > 0) {
+      return `${lead}这步能吃你的${pieceName(
+        target
+      )}，但换下来只净赚 ${gain}，够不上白吃。${engine}${actual}`;
+    }
+    return `${lead}这步能吃你的${pieceName(
+      target
+    )}，但吃完会被吃回来，换下来净亏约 ${Math.abs(gain)}，所以引擎不选它。`;
+  }
+
+  const who = moverPiece ? pieceName(moverPiece) : '子';
+  return `${lead}这一步只是把${who}挪了一步，吃不到你的任何子，谈不上白得。${engine}${actual}`;
+}
+
+/** 「他为什么不吃我的 X」：在对手可吃范围里找那颗子；若说的是对手自己的子，则直接说那步走不出来。 */
+function explainOpponentPiece(
+  fenAfter: string,
+  word: string,
+  question: string,
+  ply: Ply,
+  difficulty?: Difficulty
+): string {
+  const pos = parseFen(fenAfter);
+  const foe = pos.turn;
+  if (pieceSide(word, question) === 'theirs') {
+    const foeName = foe === 'black' ? '黑方' : '红方';
+    return `这个局面里${foeName}的${word}走不出你说的那步：那条路线被挡或不合规则，不是他不想走。`;
+  }
+  const hanging = findHangingPieces(pos, foe).filter((h) => pieceName(h.piece) === word);
+  if (hanging.length === 0) {
+    return `对手现在没有能白吃你${word}的着法：你的${word}有子保护，或者不在它的攻击范围里。`;
+  }
+  const best = hanging[0];
+  const captureZh = moveChineseFrom(fenAfter, squareName(best.from) + squareName(best.square));
+  const actualZh = ply.opponentMove ? moveChineseFrom(fenAfter, ply.opponentMove) : null;
+  return `你的${word}在 ${squareName(best.square)} 确实是白送的，对手走 ${captureZh} 能净赚约 ${
+    best.gain
+  }。${actualZh ? `他实际走的是 ${actualZh}。` : ''}${casualNote(
+    difficulty
+  )}这子应该先挪开或补一手保护。`;
+}
+
+/** 对手视角的提问；不是这类问题时返回 null，交给常规回答。 */
+function answerOpponent(
+  ply: Ply,
+  question: string,
+  tone: Tone,
+  difficulty?: Difficulty
+): string | null {
+  const fenAfter = fenAfterOf(ply);
+  if (!fenAfter) return null;
+  let pos;
+  try {
+    pos = parseFen(fenAfter);
+  } catch {
+    return null;
+  }
+  const uci = parseChineseMove(pos, question);
+  if (uci) return explainOpponentMove(fenAfter, uci, ply, tone, difficulty);
+  if (!mentionsOpponent(question)) return null;
+  const word = pieceWordOf(question);
+  return word ? explainOpponentPiece(fenAfter, word, question, ply, difficulty) : null;
 }
 
 /** 卡片正文：只讲后果。 */
@@ -111,7 +240,14 @@ export function classifyIntent(question: string): Intent {
 const FALLBACK = '我暂时只能回答三类：这步为什么臭、正确走法是什么、这步掉了多少。换个问法试试。';
 
 /** 规则式回答：覆盖「为什么臭 / 正确走法 / 掉了多少」三类意图，答不上来返回降级语。 */
-export function answerQuestion(ply: Ply, question: string, tone: Tone = 'plain'): string {
+export function answerQuestion(
+  ply: Ply,
+  question: string,
+  tone: Tone = 'plain',
+  difficulty?: Difficulty
+): string {
+  const opponent = answerOpponent(ply, question, tone, difficulty);
+  if (opponent) return opponent;
   if (ply.mover !== 'red') return FALLBACK;
 
   switch (classifyIntent(question)) {

@@ -35,7 +35,13 @@ export {
 } from './facts';
 export { renderFact, renderFacts } from './render';
 export type { Tone } from './render';
-export { moveToChinese, laneName, fileLane } from './notation';
+export {
+  moveToChinese,
+  laneName,
+  fileLane,
+  normalizeNotation,
+  parseChineseMove,
+} from './notation';
 export { confirmFacts, BAD_TRADE_MIN_LOSS } from './confirm';
 export type { EngineEvidence } from './confirm';
 export { judgeGameEnd, positionKey, SIXTY_MOVE_PLIES } from './gameEnd';

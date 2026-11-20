@@ -185,7 +185,9 @@ export default function App() {
               <QuestionPanel
                 ply={card}
                 disabled={!!inspect || game.phase !== 'player'}
-                onAsk={(q) => game.addQuestion(card, q, answerQuestion(card, q, tone))}
+                onAsk={(q) =>
+                  game.addQuestion(card, q, answerQuestion(card, q, tone, game.difficulty))
+                }
               />
             </>
           )}

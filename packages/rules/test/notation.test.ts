@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { laneName, moveToChinese, parseFen } from '../src';
+import { laneName, moveToChinese, normalizeNotation, parseChineseMove, parseFen } from '../src';
 
 const START_FEN = 'rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1';
 
@@ -35,5 +35,21 @@ describe('中文记谱', () => {
     expect(laneName('h2', 'black')).toBe('8');
     expect(laneName('a0', 'red')).toBe('九');
     expect(laneName('a0', 'black')).toBe('1');
+  });
+
+  it('反解中文记谱', () => {
+    expect(parseChineseMove(start, '炮二平五')).toBe('h2e2');
+    expect(parseChineseMove(start, '他为什么不炮二平五？')).toBe('h2e2');
+    expect(parseChineseMove(start, '胡扯')).toBeNull();
+  });
+
+  it('反解黑方记谱', () => {
+    const black = parseFen(START_FEN.replace(' w ', ' b '));
+    expect(parseChineseMove(black, '他为什么不卒1进1？')).toBe('a6a5');
+  });
+
+  it('记谱归一化', () => {
+    expect(normalizeNotation('炮二平五')).toBe('炮2平5');
+    expect(normalizeNotation('馬8進7？')).toBe('馬8进7');
   });
 });

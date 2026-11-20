@@ -254,7 +254,9 @@ export function useGame() {
           : squareName(legalAfter[0].from) + squareName(legalAfter[0].to);
         const aiMove = parseUciMove(aiUci);
         const aiPos = applyMove(myPos, aiMove);
-        const next: Ply[] = [...myPlies, { uci: aiUci, mover: 'black' }];
+        const withReply: Ply = { ...ply, opponentMove: aiUci };
+        const next: Ply[] = [...currentPlies, withReply, { uci: aiUci, mover: 'black' }];
+        setCard(withReply);
 
         setPosition(aiPos);
         setLastMove({ from: aiMove.from, to: aiMove.to });
