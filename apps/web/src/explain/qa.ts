@@ -5,10 +5,12 @@ import {
   HANGING_THRESHOLD,
   idx,
   isKingInCheck,
+  moveToUci,
   parseChineseMove,
   parseFen,
   parseUciMove,
   pieceName,
+  pieceValue,
   renderFacts,
   sameSquare,
   seeCapture,
@@ -110,6 +112,19 @@ function checkVerdict(after: Position, checkingTo: Square): string {
   return '你的帅可以躲开或垫子解将，这步将军逼不出实质收获。';
 }
 
+/** 反吃回这一格的最佳着法所用的棋子名；没人能吃回来返回 null。 */
+function bestRecaptureName(after: Position, square: Square): string | null {
+  let best: { name: string; score: number } | null = null;
+  for (const reply of generateLegalMoves(after)) {
+    if (!sameSquare(reply.to, square)) continue;
+    const piece = after.board[idx(reply.from)];
+    if (!piece) continue;
+    const score = seeCapture(after, reply);
+    if (!best || score > best.score) best = { name: pieceName(piece), score };
+  }
+  return best ? best.name : null;
+}
+
 /** 「他为什么不 X」：先核实前提（能不能吃到、是不是将军），再解释为什么不吃 / 该不该挪。 */
 function explainOpponentMove(
   fenAfter: string,
@@ -147,17 +162,30 @@ function explainOpponentMove(
 
   if (target && target.type !== 'K') {
     const gain = seeCapture(pos, move);
+    const taken = pieceValue(target.type);
+    const targetName = pieceName(target);
+    const recapture = bestRecaptureName(after, move.to);
+    // 把 SEE 的算式摊开：吃到的子写清楚，反吃方写清楚，剩下的才是净收益
+    const trade = recapture
+      ? `他能用${piece ? pieceName(piece) : '子'}吃你的${targetName}（+${taken}），但你的${recapture}立刻能吃回来，一进一出`
+      : `他能用${piece ? pieceName(piece) : '子'}吃你的${targetName}（+${taken}），你的子吃不到它，`;
+
     if (gain >= HANGING_THRESHOLD) {
-      return `${opener}确实能白吃你的${pieceName(target)}。${
+      return `${opener}${trade}净赚 ${gain}，这是白吃。${
         checks ? '还带将军。' : ''
-      }${tail}${casualNote(difficulty)}这个${pieceName(target)}没人保护，你该先挪开或补一手保护。`;
+      }${tail}${casualNote(difficulty)}这个${targetName}没人保护，你该先挪开或补一手保护。`;
     }
     if (gain > 0) {
-      return `${opener}能吃你的${pieceName(target)}，但换下来只净赚 ${gain}，够不上白吃。${tail}`;
+      const verdict =
+        gain < pieceValue('P')
+          ? `只净赚 ${gain}，连一个兵（${pieceValue('P')}）都不如，谈不上白吃。`
+          : `净赚 ${gain}，够不上白吃，所以引擎不选它。`;
+      return `${opener}${trade}${verdict}${tail}`;
     }
-    return `${opener}能吃你的${pieceName(target)}，但吃完会被吃回来，净亏约 ${Math.abs(
-      gain
-    )}，所以引擎不选它。`;
+    if (gain === 0) {
+      return `${opener}${trade}正好打平，等于白忙。${tail}`;
+    }
+    return `${opener}${trade}他反而倒亏 ${Math.abs(gain)}，所以引擎不选它。${tail}`;
   }
 
   const who = piece ? pieceName(piece) : '子';
@@ -213,6 +241,189 @@ function answerOpponent(
   if (!mentionsOpponent(question)) return null;
   const word = pieceWordOf(question);
   return word ? explainOpponentPiece(fenAfter, word, question, ply, difficulty) : null;
+}
+
+/* ---------- 追问：逐条核实用户嘴里的战术断言 ---------- */
+
+const BLOCK_RE = /(垫|挡)/;
+const CAPTURE_RE = /(吃|捉|兑|换|白得|白送)/;
+
+/** 按标点和转折词切句，逐条核实。 */
+function splitClaims(text: string): string[] {
+  return text
+    .split(/[，,。；;！!？?]|可是|不过|但|而且|然后|同时/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/** 「我这边要垫/挡」的断言；提到他/对手时不算，避免张冠李戴。 */
+function isMineBlockClaim(text: string): boolean {
+  return BLOCK_RE.test(text) && !/(他|对手|对方)/.test(text);
+}
+
+/** 上一轮讨论过的那一步：只取着法指针，局面每轮从锚点重算，不跨轮存盘。 */
+function lastDiscussedMove(ply: Ply, pos: Position): string | null {
+  const history = ply.qa ?? [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const uci = parseChineseMove(pos, history[i].q);
+    if (uci) return uci;
+  }
+  return null;
+}
+
+interface BlockRisk {
+  zh: string;
+  piece: string;
+}
+
+interface BlockResult {
+  text: string;
+  after: Position | null;
+  risk: BlockRisk | null;
+}
+
+/** 垫子：枚举所有非帅的合法解将着法，按「垫完会不会新丢子」给出优先建议。 */
+function blockVerdict(base: Position, me: 'red' | 'black', fen: string): BlockResult {
+  if (!isKingInCheck(base, me)) {
+    return { text: '这时候你并没有被将军，用不着垫子。', after: null, risk: null };
+  }
+  const replies = generateLegalMoves(base);
+  if (replies.length === 0) {
+    return { text: '你已经被将死，没有垫的可能。', after: null, risk: null };
+  }
+
+  const foe = me === 'red' ? 'black' : 'red';
+  const already = new Set(findHangingPieces(base, foe).map((h) => squareName(h.square)));
+  const options: { uci: string; cost: number; piece: string }[] = [];
+
+  for (const move of replies) {
+    const mover = base.board[idx(move.from)];
+    if (!mover || mover.type === 'K') continue; // 帅自己动不算「垫」
+    const after = applyMove(base, move);
+    const fresh = findHangingPieces(after, foe).filter(
+      (h) => !already.has(squareName(h.square))
+    );
+    const worst = fresh[0];
+    options.push({
+      uci: moveToUci(move),
+      cost: worst ? worst.gain : 0,
+      piece: worst ? pieceName(worst.piece) : '',
+    });
+  }
+
+  if (options.length === 0) {
+    return { text: '你没有别的子能垫，只能动帅。', after: null, risk: null };
+  }
+
+  options.sort((a, b) => a.cost - b.cost);
+  const best = options[0];
+  const risky = options.find((o) => o.cost > 0) ?? null;
+  const bestZh = moveChineseFrom(fen, best.uci);
+  const after = applyMove(base, parseUciMove(best.uci));
+  const risk = risky ? { zh: moveChineseFrom(fen, risky.uci), piece: risky.piece } : null;
+
+  if (best.cost > 0) {
+    return {
+      text: `垫是能垫，但每条路都要丢子，最便宜的是 ${bestZh}，之后会丢一个${best.piece}。`,
+      after,
+      risk,
+    };
+  }
+
+  const alt = options.find((o) => o.uci !== best.uci && o.cost === 0);
+  const altZh = alt ? ` 或 ${moveChineseFrom(fen, alt.uci)}` : '';
+  const warn = risky
+    ? `但用 ${moveChineseFrom(fen, risky.uci)} 垫的话，他下一步就能吃你的${risky.piece}。`
+    : '';
+  return { text: `能垫：${bestZh}${altZh}，垫完不亏子。${warn}`, after, risk };
+}
+
+/** 「他能吃我的子」：不猜哪一颗，直接扫全盘所有能被白吃的子。垫子那句已经讲过代价就不再复述。 */
+function captureVerdict(
+  base: Position,
+  me: 'red' | 'black',
+  fen: string,
+  risk: BlockRisk | null
+): string | null {
+  if (risk) return null;
+  const foe = me === 'red' ? 'black' : 'red';
+  const hanging = findHangingPieces(base, foe);
+  if (hanging.length === 0) {
+    return '这时候他没有能白吃你子的着法，这个担心不成立。';
+  }
+  const list = hanging
+    .slice(0, 2)
+    .map(
+      (h) =>
+        `${moveChineseFrom(fen, squareName(h.from) + squareName(h.square))} 吃你的${pieceName(
+          h.piece
+        )}`
+    );
+  return `不过你这里确实有子没人保：他能 ${list.join('、')}。`;
+}
+
+/** 逐条核实追问里的战术断言；不是这类追问时返回 null，交给常规回答。 */
+function answerClaims(ply: Ply, question: string): string | null {
+  const fenAfter = fenAfterOf(ply);
+  if (!fenAfter) return null;
+  let anchor: Position;
+  try {
+    anchor = parseFen(fenAfter);
+  } catch {
+    return null;
+  }
+
+  const me = ply.mover;
+  const segments = splitClaims(question);
+  const hasBlock = segments.some(isMineBlockClaim);
+  const claimed = segments.filter(
+    (s) => BLOCK_RE.test(s) || CAPTURE_RE.test(s) || parseChineseMove(anchor, s) !== null
+  ).length;
+  // 单条「他为什么不 X」交给对手视角那条通路；这里只接复合追问或垫子追问
+  if (!hasBlock && claimed < 2) return null;
+
+  const prev = lastDiscussedMove(ply, anchor);
+  let base = prev ? applyMove(anchor, parseUciMove(prev)) : anchor;
+  let fen = toFen(base);
+  const parts: string[] = [];
+  let risk: BlockRisk | null = null;
+
+  for (const seg of segments) {
+    if (isMineBlockClaim(seg)) {
+      const result = blockVerdict(base, me, fen);
+      parts.push(result.text);
+      if (result.risk) risk = result.risk;
+      if (result.after) {
+        base = result.after;
+        fen = toFen(base);
+      }
+      continue;
+    }
+
+    if (CAPTURE_RE.test(seg)) {
+      const text = captureVerdict(base, me, fen, risk);
+      if (text) parts.push(text);
+      continue;
+    }
+
+    const uci = parseChineseMove(base, seg);
+    if (uci) {
+      const after = applyMove(base, parseUciMove(uci));
+      const taken = base.board[idx(parseUciMove(uci).to)];
+      const notes = [
+        taken ? `能吃他的${pieceName(taken)}` : '吃不到子',
+        isKingInCheck(after, after.turn) ? '还带将军' : '',
+      ].filter(Boolean);
+      parts.push(`${moveChineseFrom(fen, uci)} 这步走得出来，${notes.join('，')}。`);
+      continue;
+    }
+
+    if (seg.length >= 3) {
+      parts.push('剩下那句我没法从局面上核实，你把具体着法说出来我再算。');
+    }
+  }
+
+  return parts.length > 0 ? parts.join('') : null;
 }
 
 /** 卡片正文：只讲后果。 */
@@ -275,7 +486,8 @@ export function classifyIntent(question: string): Intent {
   return null;
 }
 
-const FALLBACK = '我暂时只能回答三类：这步为什么臭、正确走法是什么、这步掉了多少。换个问法试试。';
+const FALLBACK =
+  '这句我没法直接从局面上算出来。你把想验证的一步说具体些（比如「车9进1 能吃我什么」），我就能给你结果；也可以问这步为什么臭、正确走法是什么、掉了多少。';
 
 /** 规则式回答：覆盖「为什么臭 / 正确走法 / 掉了多少」三类意图，答不上来返回降级语。 */
 export function answerQuestion(
@@ -284,6 +496,8 @@ export function answerQuestion(
   tone: Tone = 'plain',
   difficulty?: Difficulty
 ): string {
+  const claims = answerClaims(ply, question);
+  if (claims) return claims;
   const opponent = answerOpponent(ply, question, tone, difficulty);
   if (opponent) return opponent;
   if (ply.mover !== 'red') return FALLBACK;
