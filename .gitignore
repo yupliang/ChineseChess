@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+.turbo
+.vscode/*
+!.vscode/extensions.json
+# 第三方引擎文件（不进 git，用 pnpm fetch-engine 拉取）
+apps/web/public/engine/
