@@ -296,6 +296,26 @@ export function useGame() {
     [phase, position, plies, playRed]
   );
 
+  /** 开发用：让引擎按当前难度档替红方走一步，非法或失败时退回首合法走法。 */
+  const devAutoMove = useCallback(() => {
+    if (phase !== 'player' || busyRef.current) return;
+    const moves = generateLegalMoves(position);
+    if (moves.length === 0) return;
+    busyRef.current = true;
+    void aiSearch(toFen(position), difficulty)
+      .then((r) => {
+        const target = moves.find(
+          (m) => squareName(m.from) + squareName(m.to) === r.bestMove
+        );
+        return target ?? moves[0];
+      })
+      .catch(() => moves[0])
+      .then((move) => playRed(move, position, plies))
+      .finally(() => {
+        busyRef.current = false;
+      });
+  }, [phase, position, plies, difficulty, playRed]);
+
   const onSquareClick = useCallback(
     (sq: Square) => {
       if (phase !== 'player' || busyRef.current) return;
@@ -370,6 +390,7 @@ export function useGame() {
     resume,
     undo,
     playMove,
+    devAutoMove,
     onSquareClick,
     dismissCard: () => setCard(null),
   };

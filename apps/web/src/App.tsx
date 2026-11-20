@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { generateLegalMoves, parseFen, parseUciMove, type Square, type Tone } from '@cc/rules';
+import { parseFen, parseUciMove, type Square, type Tone } from '@cc/rules';
 import { Chessboard } from './board/Chessboard';
 import { ReasonCard } from './explain/ReasonCard';
 import { ReviewPanel } from './explain/ReviewPanel';
@@ -179,14 +179,7 @@ export default function App() {
           </section>
 
           {import.meta.env.DEV && game.phase === 'player' && (
-            <button
-              data-testid="dev-move"
-              className="dev"
-              onClick={() => {
-                const moves = generateLegalMoves(game.position);
-                if (moves.length > 0) game.playMove(moves[0]);
-              }}
-            >
+            <button data-testid="dev-move" className="dev" onClick={() => game.devAutoMove()}>
               自动走一步（开发用）
             </button>
           )}
