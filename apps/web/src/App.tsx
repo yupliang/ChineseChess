@@ -113,15 +113,38 @@ export default function App() {
               继续上一局（{Math.ceil(game.savedPlies.length / 2)} 回合）
             </button>
           )}
-          <button
-            data-testid="start"
-            onClick={() => {
-              resetViews();
-              void game.start();
-            }}
-          >
-            {started ? '重新开始' : '开始对局'}
-          </button>
+          {!started ? (
+            <>
+              <button
+                data-testid="start-red"
+                onClick={() => {
+                  resetViews();
+                  void game.start('red');
+                }}
+              >
+                执红先手
+              </button>
+              <button
+                data-testid="start-black"
+                onClick={() => {
+                  resetViews();
+                  void game.start('black');
+                }}
+              >
+                执黑后手
+              </button>
+            </>
+          ) : (
+            <button
+              data-testid="start"
+              onClick={() => {
+                resetViews();
+                void game.start(game.playerColor);
+              }}
+            >
+              重新开始
+            </button>
+          )}
           <button data-testid="undo" disabled={!started || game.phase === 'loading'} onClick={game.undo}>
             悔棋
           </button>
@@ -152,6 +175,7 @@ export default function App() {
         <div className="board-col">
           <Chessboard
             position={displayPosition}
+            flipped={game.playerColor === 'black'}
             selected={preview || inspect ? null : game.selected}
             targets={preview || inspect ? [] : game.targets}
             lastMove={displayLastMove}
@@ -167,7 +191,9 @@ export default function App() {
               正在回看第 {game.plies.indexOf(inspect) + 1} 步，点棋盘返回当前局面。
             </p>
           ) : (
-            !started && <p className="hint">点「开始对局」加载引擎，你执红先行。</p>
+            !started && (
+              <p className="hint">选「执红先手」或「执黑后手」加载引擎，红方先走。</p>
+            )
           )}
         </div>
 
@@ -181,6 +207,7 @@ export default function App() {
           {game.phase === 'over' && (
             <ReviewPanel
               plies={game.plies}
+              playerColor={game.playerColor}
               onJump={(ply) => {
                 setPreview(null);
                 setHighlights([]);
@@ -189,7 +216,7 @@ export default function App() {
             />
           )}
 
-          {card && card.mover === 'red' && (
+          {card && card.mover === game.playerColor && (
             <>
               <ReasonCard
                 ply={card}

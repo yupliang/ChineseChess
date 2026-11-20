@@ -1,8 +1,27 @@
+import type { Color } from '@cc/rules';
 import type { Ply } from './types';
 
 const CURRENT_KEY = 'cc-coach.current';
 const HISTORY_KEY = 'cc-coach.history';
+const SIDE_KEY = 'cc-coach.side';
 const MAX_HISTORY = 10;
+
+/** 你执哪一方：刷新/续局时沿用上次的选择。 */
+export function saveSide(color: Color): void {
+  try {
+    localStorage.setItem(SIDE_KEY, color);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadSide(): Color {
+  try {
+    return localStorage.getItem(SIDE_KEY) === 'black' ? 'black' : 'red';
+  } catch {
+    return 'red';
+  }
+}
 
 export function saveCurrent(plies: Ply[]): void {
   try {

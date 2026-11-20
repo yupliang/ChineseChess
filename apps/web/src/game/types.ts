@@ -14,7 +14,7 @@ export interface QAItem {
 export interface Ply {
   uci: string;
   mover: Color;
-  /** 以下字段只有你（红方）的着法才有 */
+  /** 以下字段只有你（执红或执黑）的着法才有 */
   tier?: Tier;
   lossPct?: number;
   facts?: Fact[];

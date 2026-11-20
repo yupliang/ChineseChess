@@ -1,9 +1,11 @@
+import type { Color } from '@cc/rules';
 import { moveChineseFrom } from '../game/pv';
 import type { Ply } from '../game/types';
 import { moveAccuracy, TIER_META } from './winrate';
 
 export interface ReviewPanelProps {
   plies: Ply[];
+  playerColor: Color;
   onJump: (ply: Ply) => void;
 }
 
@@ -11,8 +13,9 @@ const CHART_W = 320;
 const CHART_H = 110;
 const PAD = 8;
 
-export function ReviewPanel({ plies, onJump }: ReviewPanelProps) {
-  const reds = plies.filter((p) => p.mover === 'red' && p.winAfter !== undefined);
+export function ReviewPanel({ plies, playerColor, onJump }: ReviewPanelProps) {
+  const sideName = playerColor === 'red' ? '红方' : '黑方';
+  const reds = plies.filter((p) => p.mover === playerColor && p.winAfter !== undefined);
   if (reds.length === 0) return null;
 
   const accuracy = Math.round(
@@ -42,7 +45,7 @@ export function ReviewPanel({ plies, onJump }: ReviewPanelProps) {
       <svg
         viewBox={`0 0 ${CHART_W} ${CHART_H}`}
         style={{ width: '100%', display: 'block', margin: '6px 0 12px' }}
-        aria-label="红方胜率曲线"
+        aria-label={`${sideName}胜率曲线`}
       >
         <line
           x1={PAD}
@@ -65,7 +68,7 @@ export function ReviewPanel({ plies, onJump }: ReviewPanelProps) {
       </svg>
       <div className="chart-legend">
         <span>{curve.length - 1} 步</span>
-        <span>上：红方胜率高</span>
+        <span>上：{sideName}胜率高</span>
       </div>
 
       <h3>最臭的 3 步</h3>

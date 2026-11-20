@@ -6,9 +6,6 @@ const MARGIN = 46;
 const W = 8 * CELL + MARGIN * 2;
 const H = 9 * CELL + MARGIN * 2;
 
-const px = (file: number) => MARGIN + file * CELL;
-const py = (rank: number) => MARGIN + (9 - rank) * CELL;
-
 const FILES = [0, 1, 2, 3, 4, 5, 6, 7, 8];
 const RANKS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 const CN_FILES = ['九', '八', '七', '六', '五', '四', '三', '二', '一'];
@@ -19,26 +16,38 @@ export interface ChessboardProps {
   targets?: Square[];
   lastMove?: { from: Square; to: Square } | null;
   highlights?: Square[];
+  /** 执黑时翻转棋盘，让自己的子落在下方 */
+  flipped?: boolean;
   onSquareClick?: (sq: Square) => void;
 }
 
-function PieceView({ piece, sq, from }: { piece: Piece; sq: Square; from?: Square }) {
+function PieceView({
+  piece,
+  cx,
+  cy,
+  slide,
+}: {
+  piece: Piece;
+  cx: number;
+  cy: number;
+  slide?: { dx: number; dy: number };
+}) {
   const red = piece.color === 'red';
   const ink = red ? '#b3261e' : '#262626';
   // 刚走过的那颗子从起点滑到终点：靠 CSS animation 在每个新走法挂载时播一次
-  const slide = from
+  const style = slide
     ? ({
         animation: 'piece-slide 200ms cubic-bezier(0.25, 0.8, 0.3, 1)',
-        '--slide-dx': `${px(from.file) - px(sq.file)}px`,
-        '--slide-dy': `${py(from.rank) - py(sq.rank)}px`,
+        '--slide-dx': `${slide.dx}px`,
+        '--slide-dy': `${slide.dy}px`,
       } as CSSProperties)
     : undefined;
   return (
-    <g pointerEvents="none" style={slide}>
-      <circle cx={px(sq.file)} cy={py(sq.rank)} r={23} fill="#fdf3d8" stroke={ink} strokeWidth={2.5} />
+    <g pointerEvents="none" style={style}>
+      <circle cx={cx} cy={cy} r={23} fill="#fdf3d8" stroke={ink} strokeWidth={2.5} />
       <circle
-        cx={px(sq.file)}
-        cy={py(sq.rank)}
+        cx={cx}
+        cy={cy}
         r={19}
         fill="none"
         stroke={ink}
@@ -46,8 +55,8 @@ function PieceView({ piece, sq, from }: { piece: Piece; sq: Square; from?: Squar
         opacity={0.45}
       />
       <text
-        x={px(sq.file)}
-        y={py(sq.rank) + 1}
+        x={cx}
+        y={cy + 1}
         textAnchor="middle"
         dominantBaseline="middle"
         fontSize={26}
@@ -67,8 +76,15 @@ export function Chessboard({
   targets = [],
   lastMove = null,
   highlights = [],
+  flipped = false,
   onSquareClick,
 }: ChessboardProps) {
+  // 棋盘坐标 → 屏幕坐标；flipped 时整体旋转 180°
+  const px = (file: number) => MARGIN + (flipped ? 8 - file : file) * CELL;
+  const py = (rank: number) => MARGIN + (flipped ? rank : 9 - rank) * CELL;
+  const TOP_Y = MARGIN;
+  const BOTTOM_Y = MARGIN + 9 * CELL;
+
   const pieces: Array<{ piece: Piece; sq: Square }> = [];
   for (const rank of RANKS) {
     for (const file of FILES) {
@@ -76,6 +92,10 @@ export function Chessboard({
       if (piece) pieces.push({ piece, sq: { file, rank } });
     }
   }
+
+  // 上缘归黑方、下缘归红方；翻转后上下互换，文字本身保持正向
+  const topLabels = flipped ? [...CN_FILES].reverse() : FILES.map((file) => String(file + 1));
+  const bottomLabels = flipped ? FILES.map((file) => String(9 - file)) : CN_FILES;
 
   return (
     <svg
@@ -108,17 +128,17 @@ export function Chessboard({
       </g>
 
       <rect
-        x={px(0) - 6}
-        y={py(9) - 6}
-        width={px(8) - px(0) + 12}
-        height={py(0) - py(9) + 12}
+        x={MARGIN - 6}
+        y={MARGIN - 6}
+        width={8 * CELL + 12}
+        height={9 * CELL + 12}
         fill="none"
         stroke="#7a5c34"
         strokeWidth={2.5}
       />
 
       <text
-        x={px(2)}
+        x={flipped ? px(6) : px(2)}
         y={(py(4) + py(5)) / 2}
         textAnchor="middle"
         dominantBaseline="middle"
@@ -130,7 +150,7 @@ export function Chessboard({
         楚 河
       </text>
       <text
-        x={px(6)}
+        x={flipped ? px(2) : px(6)}
         y={(py(4) + py(5)) / 2}
         textAnchor="middle"
         dominantBaseline="middle"
@@ -142,7 +162,7 @@ export function Chessboard({
         汉 界
       </text>
 
-      {/* 坐标刻度：上缘黑方视角 1~9（左→右），下缘红方视角 一~九（右→左） */}
+      {/* 坐标刻度：上缘归黑方、下缘归红方；执黑翻转后两者互换，文字仍保持正向 */}
       <g
         fontSize={13}
         fill="#7a5c34"
@@ -151,14 +171,14 @@ export function Chessboard({
         fontFamily="Songti SC, STSong, SimSun, serif"
         pointerEvents="none"
       >
-        {FILES.map((file) => (
-          <text key={`tf${file}`} x={px(file)} y={py(9) - 33}>
-            {file + 1}
+        {topLabels.map((label, i) => (
+          <text key={`tf${i}`} x={MARGIN + i * CELL} y={TOP_Y - 33}>
+            {label}
           </text>
         ))}
-        {FILES.map((file) => (
-          <text key={`bf${file}`} x={px(file)} y={py(0) + 33}>
-            {CN_FILES[file]}
+        {bottomLabels.map((label, i) => (
+          <text key={`bf${i}`} x={MARGIN + i * CELL} y={BOTTOM_Y + 33}>
+            {label}
           </text>
         ))}
       </g>
@@ -229,7 +249,12 @@ export function Chessboard({
         const key = moved
           ? `${sq.file}-${sq.rank}@${lastMove!.from.file}${lastMove!.from.rank}`
           : `${sq.file}-${sq.rank}`;
-        return <PieceView key={key} piece={piece} sq={sq} from={moved ? lastMove!.from : undefined} />;
+        const cx = px(sq.file);
+        const cy = py(sq.rank);
+        const slide = moved
+          ? { dx: px(lastMove!.from.file) - cx, dy: py(lastMove!.from.rank) - cy }
+          : undefined;
+        return <PieceView key={key} piece={piece} cx={cx} cy={cy} slide={slide} />;
       })}
 
       {/* 选中 */}

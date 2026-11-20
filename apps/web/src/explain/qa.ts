@@ -708,13 +708,12 @@ export function answerQuestion(
   const opponent = answerOpponent(ply, question, tone, difficulty);
   if (opponent) return opponent;
   // 问对手的意图但没点名具体着法：按他实际那一步讲，不要回答成「你走的这步没有战术问题」
-  if (ply.mover === 'red' && mentionsOpponent(question) && asksIntent(question)) {
+  if (mentionsOpponent(question) && asksIntent(question)) {
     const fenAfter = fenAfterOf(ply);
     if (fenAfter && ply.opponentMove) {
       return describeIntent(fenAfter, ply.opponentMove, ply, 'actual');
     }
   }
-  if (ply.mover !== 'red') return FALLBACK;
 
   switch (classifyIntent(question)) {
     case 'next': {

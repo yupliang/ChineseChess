@@ -12,6 +12,7 @@ import {
   sameSquare,
   squareName,
   toFen,
+  type Color,
   type Fact,
   type GameEnd,
   type Move,
@@ -21,7 +22,14 @@ import {
 import { aiSearch, engineSearch, loadEngine } from './engineClient';
 import { cpToWinPct, tierFor } from '../explain/winrate';
 import type { Difficulty, Phase, Ply } from './types';
-import { clearCurrent, loadCurrent, saveCurrent, saveFinished } from './storage';
+import {
+  clearCurrent,
+  loadCurrent,
+  loadSide,
+  saveCurrent,
+  saveFinished,
+  saveSide,
+} from './storage';
 
 export const START_FEN =
   'rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1';
@@ -51,16 +59,16 @@ function buildHistory(plies: Ply[]): { positions: Position[]; checks: boolean[] 
   return { positions, checks };
 }
 
-function endMessage(end: GameEnd): string {
+function endMessage(end: GameEnd, me: Color): string {
   switch (end.reason) {
     case 'checkmate':
-      return end.winner === 'red' ? '你将死了对手，赢了' : '你被将死了';
+      return end.winner === me ? '你将死了对手，赢了' : '你被将死了';
     case 'stalemate':
-      return end.winner === 'red' ? '对手无棋可走（困毙），你赢了' : '你无棋可走（困毙），输了';
+      return end.winner === me ? '对手无棋可走（困毙），你赢了' : '你无棋可走（困毙），输了';
     case 'repetition':
       return '三次重复局面，和棋';
     case 'perpetual-check':
-      return end.winner === 'red' ? '对手长将判负，你赢了' : '你长将判负，输了';
+      return end.winner === me ? '对手长将判负，你赢了' : '你长将判负，输了';
     case 'sixty-move':
       return '60 回合无吃子，和棋';
     default:
@@ -68,11 +76,13 @@ function endMessage(end: GameEnd): string {
   }
 }
 
+const sideLabel = (color: Color) => (color === 'red' ? '红方' : '黑方');
+
 export function useGame() {
   const [position, setPosition] = useState<Position>(() => parseFen(START_FEN));
   const [plies, setPlies] = useState<Ply[]>([]);
   const [phase, setPhase] = useState<Phase>('idle');
-  const [status, setStatus] = useState('点击「开始对局」，红方先走');
+  const [status, setStatus] = useState('选择执红或执黑，然后开始对局');
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<Square | null>(null);
@@ -81,6 +91,7 @@ export function useGame() {
   const [difficulty, setDifficulty] = useState<Difficulty>('casual');
   const [result, setResult] = useState('');
   const [savedPlies, setSavedPlies] = useState<Ply[] | null>(() => loadCurrent());
+  const [playerColor, setPlayerColor] = useState<Color>(() => loadSide());
 
   const baselineRef = useRef<Baseline | null>(null);
   const busyRef = useRef(false);
@@ -107,43 +118,75 @@ export function useGame() {
     return baseline;
   }, []);
 
-  const start = useCallback(async () => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    clearCurrent();
-    setSavedPlies(null);
-    setResult('');
-    setError('');
-    setProgress(0);
-    setPhase('loading');
-    setStatus('正在加载引擎与权重（约 11MB，首次较慢）…');
-    try {
-      await loadEngine((loaded, total) => {
-        setProgress(total ? Math.round((loaded / total) * 100) : 0);
-      });
-      const pos = parseFen(START_FEN);
-      setPosition(pos);
-      setPlies([]);
-      setCard(null);
-      setLastMove(null);
-      setSelected(null);
-      baselineRef.current = null;
-      setStatus('引擎就绪，正在计算…');
-      await refreshBaseline(pos);
-      setPhase('player');
-      setStatus('你的回合（红方）');
-    } catch (e) {
-      setError('引擎加载失败：' + (e instanceof Error ? e.message : String(e)));
-      setPhase('idle');
-      setStatus('加载失败');
-    } finally {
-      busyRef.current = false;
-    }
-  }, [refreshBaseline]);
+  /** 让引擎在当前局面走一步：校验合法性，非法时退回首合法着法。 */
+  const chooseEngineMove = useCallback(
+    async (pos: Position): Promise<string> => {
+      const legal = generateLegalMoves(pos);
+      const reply = await aiSearch(toFen(pos), difficulty);
+      return legal.some((m) => squareName(m.from) + squareName(m.to) === reply.bestMove)
+        ? reply.bestMove
+        : squareName(legal[0].from) + squareName(legal[0].to);
+    },
+    [difficulty]
+  );
+
+  const start = useCallback(
+    async (color: Color = 'red') => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      setPlayerColor(color);
+      saveSide(color);
+      clearCurrent();
+      setSavedPlies(null);
+      setResult('');
+      setError('');
+      setProgress(0);
+      setPhase('loading');
+      setStatus('正在加载引擎与权重（约 11MB，首次较慢）…');
+      const label = sideLabel(color);
+      try {
+        await loadEngine((loaded, total) => {
+          setProgress(total ? Math.round((loaded / total) * 100) : 0);
+        });
+        let pos = parseFen(START_FEN);
+        setPosition(pos);
+        setPlies([]);
+        setCard(null);
+        setLastMove(null);
+        setSelected(null);
+        baselineRef.current = null;
+
+        if (color === 'black') {
+          // 你执黑：红方先手，开局这步由电脑代劳
+          setStatus('对手先行（红方）…');
+          const opening = await chooseEngineMove(pos);
+          pos = applyMove(pos, parseUciMove(opening));
+          setPosition(pos);
+          setLastMove(parseUciMove(opening));
+          setPlies([{ uci: opening, mover: 'red' }]);
+        }
+
+        setStatus('引擎就绪，正在计算…');
+        await refreshBaseline(pos);
+        setPhase('player');
+        setStatus(`你的回合（${label}）`);
+      } catch (e) {
+        setError('引擎加载失败：' + (e instanceof Error ? e.message : String(e)));
+        setPhase('idle');
+        setStatus('加载失败');
+      } finally {
+        busyRef.current = false;
+      }
+    },
+    [chooseEngineMove, refreshBaseline]
+  );
 
   const resume = useCallback(async () => {
     if (!savedPlies || busyRef.current) return;
     busyRef.current = true;
+    const color = loadSide();
+    setPlayerColor(color);
+    const label = sideLabel(color);
     setError('');
     setProgress(0);
     setResult('');
@@ -159,11 +202,11 @@ export function useGame() {
       setPlies(savedPlies);
       const last = savedPlies[savedPlies.length - 1];
       setLastMove(last ? parseUciMove(last.uci) : null);
-      const lastRed = [...savedPlies].reverse().find((p) => p.mover === 'red') ?? null;
-      setCard(lastRed);
+      const lastMine = [...savedPlies].reverse().find((p) => p.mover === color) ?? null;
+      setCard(lastMine);
       setSavedPlies(null);
       setPhase('player');
-      setStatus('你的回合（红方）');
+      setStatus(`你的回合（${label}）`);
       await refreshBaseline(pos);
     } catch (e) {
       setError('恢复失败：' + (e instanceof Error ? e.message : String(e)));
@@ -173,10 +216,12 @@ export function useGame() {
     }
   }, [savedPlies, refreshBaseline]);
 
-  const playRed = useCallback(
+  const playMine = useCallback(
     async (move: Move, currentPosition: Position, currentPlies: Ply[]) => {
       const fenBefore = toFen(currentPosition);
       const uci = squareName(move.from) + squareName(move.to);
+      const label = sideLabel(playerColor);
+      const foeColor: Color = playerColor === 'red' ? 'black' : 'red';
 
       let staticFacts: Fact[] = [];
       try {
@@ -222,7 +267,7 @@ export function useGame() {
 
         const ply: Ply = {
           uci,
-          mover: 'red',
+          mover: playerColor,
           tier: tierFor(lossPct, baseline.bestMove === uci),
           lossPct,
           facts,
@@ -244,8 +289,8 @@ export function useGame() {
         if (endAfterMe.over) {
           setPlies(myPlies);
           setPhase('over');
-          setResult(endMessage(endAfterMe));
-          setStatus(endMessage(endAfterMe));
+          setResult(endMessage(endAfterMe, playerColor));
+          setStatus(endMessage(endAfterMe, playerColor));
           saveFinished(myPlies);
           return;
         }
@@ -253,17 +298,11 @@ export function useGame() {
         // 对手按难度走棋（陪练会漏战术，认真接近全力）；先停顿一下别秒回
         setStatus('对手正在思考…');
         await sleep(AI_REPLY_PAUSE_MS);
-        const reply = await aiSearch(afterFen, difficulty);
-        const legalAfter = generateLegalMoves(myPos);
-        const aiUci = legalAfter.some(
-          (m) => squareName(m.from) + squareName(m.to) === reply.bestMove
-        )
-          ? reply.bestMove
-          : squareName(legalAfter[0].from) + squareName(legalAfter[0].to);
+        const aiUci = await chooseEngineMove(myPos);
         const aiMove = parseUciMove(aiUci);
         const aiPos = applyMove(myPos, aiMove);
         const withReply: Ply = { ...ply, opponentMove: aiUci };
-        const next: Ply[] = [...currentPlies, withReply, { uci: aiUci, mover: 'black' }];
+        const next: Ply[] = [...currentPlies, withReply, { uci: aiUci, mover: foeColor }];
         setCard(withReply);
 
         setPosition(aiPos);
@@ -279,14 +318,14 @@ export function useGame() {
 
         if (endAfterAi.over) {
           setPhase('over');
-          setResult(endMessage(endAfterAi));
-          setStatus(endMessage(endAfterAi));
+          setResult(endMessage(endAfterAi, playerColor));
+          setStatus(endMessage(endAfterAi, playerColor));
           saveFinished(next);
           return;
         }
 
         setPhase('player');
-        setStatus('你的回合（红方）');
+        setStatus(`你的回合（${label}）`);
         // 顺手把「对手应完之后你该怎么走」也算好，问答里的「我该怎么走」直接用它
         const nextBaseline = await refreshBaseline(aiPos);
         const enriched: Ply = {
@@ -300,24 +339,24 @@ export function useGame() {
       } catch (e) {
         setError('分析失败：' + (e instanceof Error ? e.message : String(e)));
         setPhase('player');
-        setStatus('你的回合（红方）');
+        setStatus(`你的回合（${label}）`);
       }
     },
-    [difficulty, refreshBaseline]
+    [chooseEngineMove, difficulty, playerColor, refreshBaseline]
   );
 
   const playMove = useCallback(
     (move: Move) => {
       if (phase !== 'player' || busyRef.current) return;
       busyRef.current = true;
-      void playRed(move, position, plies).finally(() => {
+      void playMine(move, position, plies).finally(() => {
         busyRef.current = false;
       });
     },
-    [phase, position, plies, playRed]
+    [phase, position, plies, playMine]
   );
 
-  /** 开发用：让引擎按当前难度档替红方走一步，非法或失败时退回首合法走法。 */
+  /** 开发用：让引擎按当前难度档替你走一步，非法或失败时退回首合法走法。 */
   const devAutoMove = useCallback(() => {
     if (phase !== 'player' || busyRef.current) return;
     const moves = generateLegalMoves(position);
@@ -331,11 +370,11 @@ export function useGame() {
         return target ?? moves[0];
       })
       .catch(() => moves[0])
-      .then((move) => playRed(move, position, plies))
+      .then((move) => playMine(move, position, plies))
       .finally(() => {
         busyRef.current = false;
       });
-  }, [phase, position, plies, difficulty, playRed]);
+  }, [phase, position, plies, difficulty, playMine]);
 
   const onSquareClick = useCallback(
     (sq: Square) => {
@@ -351,13 +390,13 @@ export function useGame() {
       }
 
       const piece = pieceAt(position, sq);
-      if (piece && piece.color === 'red') {
+      if (piece && piece.color === playerColor) {
         setSelected(sq);
         return;
       }
       setSelected(null);
     },
-    [phase, position, selected, playMove]
+    [phase, position, selected, playMove, playerColor]
   );
 
   /** 给某一步追加一条问答，随 Ply 一起持久化。 */
@@ -383,7 +422,7 @@ export function useGame() {
     if (busyRef.current || phase === 'loading') return;
     let keep = -1;
     for (let i = plies.length - 1; i >= 0; i--) {
-      if (plies[i].mover === 'red') {
+      if (plies[i].mover === playerColor) {
         keep = i;
         break;
       }
@@ -399,7 +438,7 @@ export function useGame() {
     setSelected(null);
     setResult('');
     setPhase('player');
-    setStatus('你的回合（红方）');
+    setStatus(`你的回合（${sideLabel(playerColor)}）`);
     const last = kept[kept.length - 1];
     setLastMove(last ? parseUciMove(last.uci) : null);
     baselineRef.current = null;
@@ -409,7 +448,7 @@ export function useGame() {
       .finally(() => {
         busyRef.current = false;
       });
-  }, [plies, phase, refreshBaseline]);
+  }, [plies, phase, playerColor, refreshBaseline]);
 
   return {
     position,
@@ -426,6 +465,7 @@ export function useGame() {
     setDifficulty,
     result,
     savedPlies,
+    playerColor,
     start,
     resume,
     undo,
