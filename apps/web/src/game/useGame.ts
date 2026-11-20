@@ -26,6 +26,10 @@ import { clearCurrent, loadCurrent, saveCurrent, saveFinished } from './storage'
 export const START_FEN =
   'rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1';
 
+/** 对手别秒回，留出反应时间。 */
+const AI_REPLY_PAUSE_MS = 2200;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 interface Baseline {
   fen: string;
   bestMove: string;
@@ -244,7 +248,9 @@ export function useGame() {
           return;
         }
 
-        // 对手按难度走棋（陪练会漏战术，认真接近全力）
+        // 对手按难度走棋（陪练会漏战术，认真接近全力）；先停顿一下别秒回
+        setStatus('对手正在思考…');
+        await sleep(AI_REPLY_PAUSE_MS);
         const reply = await aiSearch(afterFen, difficulty);
         const legalAfter = generateLegalMoves(myPos);
         const aiUci = legalAfter.some(
