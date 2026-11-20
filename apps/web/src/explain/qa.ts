@@ -1,16 +1,21 @@
 import {
   applyMove,
   findHangingPieces,
+  generateLegalMoves,
   HANGING_THRESHOLD,
   idx,
+  isKingInCheck,
   parseChineseMove,
   parseFen,
   parseUciMove,
   pieceName,
   renderFacts,
+  sameSquare,
   seeCapture,
   squareName,
   toFen,
+  type Position,
+  type Square,
   type Tone,
 } from '@cc/rules';
 import { moveChineseFrom, pvChineseFrom } from '../game/pv';
@@ -84,10 +89,32 @@ function casualNote(difficulty?: Difficulty): string {
     : '';
 }
 
-/** 「他为什么不 X」：先校验前提（这步能不能吃到），再解释为什么不吃 / 该不该挪。 */
+/** 问句里是否在声称这步能将军 / 抽将。 */
+function claimsCheck(text: string): boolean {
+  return /(将军|将一军|打将|抽将|抽|叫将)/.test(text);
+}
+
+/** 同一着法之前问过没有：问过就不再重念「你说的是 X 吧」。 */
+function alreadyAsked(ply: Ply, pos: Position, uci: string): boolean {
+  return (ply.qa ?? []).some((item) => parseChineseMove(pos, item.q) === uci);
+}
+
+/** 将军这步换到了什么：能吃掉将军的子就说不划算，能解将就说没收获。 */
+function checkVerdict(after: Position, checkingTo: Square): string {
+  const replies = generateLegalMoves(after);
+  if (replies.length === 0) return '而且这是将死，不是普通将军。';
+  const best = replies
+    .filter((m) => sameSquare(m.to, checkingTo))
+    .reduce((max, m) => Math.max(max, seeCapture(after, m)), -Infinity);
+  if (best > 0) return '但你的子能直接吃掉将军的棋子，这个将换不到东西。';
+  return '你的帅可以躲开或垫子解将，这步将军逼不出实质收获。';
+}
+
+/** 「他为什么不 X」：先核实前提（能不能吃到、是不是将军），再解释为什么不吃 / 该不该挪。 */
 function explainOpponentMove(
   fenAfter: string,
   uci: string,
+  question: string,
   ply: Ply,
   tone: Tone,
   difficulty?: Difficulty
@@ -95,36 +122,47 @@ function explainOpponentMove(
   const pos = parseFen(fenAfter);
   const move = parseUciMove(uci);
   const zh = moveChineseFrom(fenAfter, uci);
-  const moverPiece = pos.board[idx(move.from)];
+  const piece = pos.board[idx(move.from)];
   const target = pos.board[idx(move.to)];
-  const lead =
-    tone === 'blunt' ? `我按你说的 ${zh} 来理解。` : `我按你提到的 ${zh} 这一步来理解。`;
+  const after = applyMove(pos, move);
+  const checks = isKingInCheck(after, after.turn);
+  const opener = alreadyAsked(ply, pos, uci)
+    ? '还是这步，'
+    : tone === 'blunt'
+      ? `${zh} 这步，`
+      : `你提到的 ${zh}，`;
+
   const engineZh = ply.replyMove ? moveChineseFrom(fenAfter, ply.replyMove) : null;
   const actualZh = ply.opponentMove ? moveChineseFrom(fenAfter, ply.opponentMove) : null;
-  const engine = engineZh ? `引擎给对手选的是 ${engineZh}。` : '';
-  const actual = actualZh && actualZh !== engineZh ? `他实际走的是 ${actualZh}。` : '';
+  const tail =
+    (engineZh ? `引擎给对手选的是 ${engineZh}。` : '') +
+    (actualZh && actualZh !== engineZh ? `他实际走的是 ${actualZh}。` : '');
+
+  // 用户明确说「这步能将军」，先把这件事核实清楚，不要绕过去
+  if (claimsCheck(question)) {
+    if (checks) return `${opener}走完确实将军。${checkVerdict(after, move.to)}${tail}`;
+    const extra = target && target.type !== 'K' ? '' : '它也没吃到子，';
+    return `${opener}这步不将军——走完 ${zh}，你的帅并没有被攻击。${extra}${tail}`;
+  }
 
   if (target && target.type !== 'K') {
     const gain = seeCapture(pos, move);
     if (gain >= HANGING_THRESHOLD) {
-      return `${lead}这一步确实能白吃你的${pieceName(
-        target
-      )}，净赚约 ${gain}。${engine}${actual}${casualNote(
-        difficulty
-      )}你的${pieceName(target)}没人保护，应该先挪开或补一手保护。`;
+      return `${opener}确实能白吃你的${pieceName(target)}。${
+        checks ? '还带将军。' : ''
+      }${tail}${casualNote(difficulty)}这个${pieceName(target)}没人保护，你该先挪开或补一手保护。`;
     }
     if (gain > 0) {
-      return `${lead}这步能吃你的${pieceName(
-        target
-      )}，但换下来只净赚 ${gain}，够不上白吃。${engine}${actual}`;
+      return `${opener}能吃你的${pieceName(target)}，但换下来只净赚 ${gain}，够不上白吃。${tail}`;
     }
-    return `${lead}这步能吃你的${pieceName(
-      target
-    )}，但吃完会被吃回来，换下来净亏约 ${Math.abs(gain)}，所以引擎不选它。`;
+    return `${opener}能吃你的${pieceName(target)}，但吃完会被吃回来，净亏约 ${Math.abs(
+      gain
+    )}，所以引擎不选它。`;
   }
 
-  const who = moverPiece ? pieceName(moverPiece) : '子';
-  return `${lead}这一步只是把${who}挪了一步，吃不到你的任何子，谈不上白得。${engine}${actual}`;
+  const who = piece ? pieceName(piece) : '子';
+  const checkNote = checks ? `不过它确实带将军，${checkVerdict(after, move.to)}` : '';
+  return `${opener}只是把${who}挪了个位置，吃不到你的子，谈不上白得。${checkNote}${tail}`;
 }
 
 /** 「他为什么不吃我的 X」：在对手可吃范围里找那颗子；若说的是对手自己的子，则直接说那步走不出来。 */
@@ -171,7 +209,7 @@ function answerOpponent(
     return null;
   }
   const uci = parseChineseMove(pos, question);
-  if (uci) return explainOpponentMove(fenAfter, uci, ply, tone, difficulty);
+  if (uci) return explainOpponentMove(fenAfter, uci, question, ply, tone, difficulty);
   if (!mentionsOpponent(question)) return null;
   const word = pieceWordOf(question);
   return word ? explainOpponentPiece(fenAfter, word, question, ply, difficulty) : null;
