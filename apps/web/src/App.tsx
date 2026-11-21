@@ -10,15 +10,18 @@ import {
   type Tone,
 } from '@cc/rules';
 import { Chessboard } from './board/Chessboard';
-import { ReasonCard } from './explain/ReasonCard';
-import { QuestionPanel } from './explain/QuestionPanel';
-import { ReviewPanel } from './explain/ReviewPanel';
 import { answerQuestion } from './explain/qa';
-import { TIER_META } from './explain/winrate';
 import { START_FEN, useGame } from './game/useGame';
 import { applyPv } from './game/pv';
 import { playMoveSound, primeAudio } from './game/sound';
 import type { Ply } from './game/types';
+import { SidePanel } from './side/SidePanel';
+import {
+  createPanelChannel,
+  type PanelAction,
+  type PanelLink,
+  type PanelSnapshot,
+} from './sync/panelSync';
 
 export default function App() {
   const game = useGame();
@@ -29,6 +32,12 @@ export default function App() {
 
   const card = inspect ?? game.card;
   const started = game.phase !== 'idle';
+
+  // 独立面板窗口：主窗口是唯一数据源，面板只负责展示并把操作发回来
+  const popupRef = useRef<Window | null>(null);
+  const [detached, setDetached] = useState(false);
+  const linkRef = useRef<PanelLink | null>(null);
+  const actionRef = useRef<(action: PanelAction) => void>(() => {});
 
   // 浏览器要求用户手势后才能出声，首次点任意位置先解锁
   useEffect(() => {
@@ -91,6 +100,118 @@ export default function App() {
     }
     return out;
   }, [game.plies]);
+
+  const snapshot: PanelSnapshot = {
+    phase: game.phase,
+    status: game.status,
+    result: game.result,
+    error: game.error,
+    progress: game.progress,
+    tone,
+    difficulty: game.difficulty,
+    playerColor: game.playerColor,
+    myTurn: game.myTurn,
+    plies: game.plies,
+    chineseMoves,
+    card,
+    inspectActive: !!inspect,
+    previewIndex: preview ? preview.index : null,
+    previewTotal: preview ? preview.moves.length : null,
+  };
+  const snapshotRef = useRef<PanelSnapshot>(snapshot);
+  snapshotRef.current = snapshot;
+
+  useEffect(() => {
+    const link = createPanelChannel((msg) => {
+      if (msg.kind === 'action') actionRef.current(msg.action);
+    });
+    linkRef.current = link;
+    return () => {
+      link.close();
+      linkRef.current = null;
+    };
+  }, []);
+
+  // 每次渲染都把最新快照推给面板窗口
+  useEffect(() => {
+    linkRef.current?.postState(snapshot);
+  });
+
+  actionRef.current = (action: PanelAction) => {
+    switch (action.type) {
+      case 'requestState':
+        linkRef.current?.postState(snapshotRef.current);
+        break;
+      case 'ask': {
+        const ply = game.plies[action.plyIndex];
+        if (ply) game.addQuestion(ply, action.question, action.answer);
+        break;
+      }
+      case 'devMove':
+        game.devAutoMove();
+        break;
+      case 'highlight':
+        setHighlights(action.squares);
+        break;
+      case 'previewEnter':
+        if (card?.pv?.length) setPreview({ moves: card.pv, index: 0 });
+        break;
+      case 'previewStep':
+        setPreview((p) =>
+          p ? { ...p, index: Math.max(0, Math.min(p.moves.length, p.index + action.delta)) } : p
+        );
+        break;
+      case 'previewExit':
+        setPreview(null);
+        break;
+      case 'inspect': {
+        const ply = game.plies[action.plyIndex];
+        if (ply) {
+          setPreview(null);
+          setHighlights([]);
+          setInspect(ply);
+        }
+        break;
+      }
+      case 'inspectExit':
+        setInspect(null);
+        break;
+    }
+  };
+
+  const openPanel = () => {
+    if (popupRef.current && !popupRef.current.closed) {
+      popupRef.current.focus();
+      return;
+    }
+    const popup = window.open(
+      '/panel.html',
+      'chesscoach-panel',
+      'popup=yes,width=460,height=880'
+    );
+    if (popup) {
+      popupRef.current = popup;
+      setDetached(true);
+    }
+  };
+
+  const closePanel = () => {
+    popupRef.current?.close();
+    popupRef.current = null;
+    setDetached(false);
+  };
+
+  // 用户直接关掉小窗时，侧栏自动回到主窗口
+  useEffect(() => {
+    if (!detached) return;
+    const timer = window.setInterval(() => {
+      if (!popupRef.current || popupRef.current.closed) {
+        popupRef.current = null;
+        setDetached(false);
+      }
+    }, 800);
+    return () => window.clearInterval(timer);
+  }, [detached]);
 
   return (
     <div className="app">
@@ -165,6 +286,13 @@ export default function App() {
           <button data-testid="tone" onClick={() => setTone(tone === 'blunt' ? 'plain' : 'blunt')}>
             {tone === 'blunt' ? '语气：毒舌' : '语气：正经'}
           </button>
+          <button
+            data-testid="panel"
+            onClick={detached ? closePanel : openPanel}
+            title="把教练面板（问答、棋谱）放到独立窗口"
+          >
+            {detached ? '关闭独立面板' : '弹出独立面板'}
+          </button>
         </div>
       </header>
 
@@ -179,7 +307,7 @@ export default function App() {
         </pre>
       )}
 
-      <main className="layout">
+      <main className={detached ? 'layout detached' : 'layout'}>
         <div className="board-col">
           <Chessboard
             position={displayPosition}
@@ -207,83 +335,37 @@ export default function App() {
           )}
         </div>
 
-        <aside className="side-col">
-          {game.phase === 'over' && (
-            <div className="result" data-testid="result">
-              {game.result}
-            </div>
-          )}
-
-          {game.phase === 'over' && (
-            <ReviewPanel
-              plies={game.plies}
-              playerColor={game.playerColor}
-              onJump={(ply) => {
-                setPreview(null);
-                setHighlights([]);
-                setInspect(ply);
-              }}
-            />
-          )}
-
-          {card && card.mover === game.playerColor && (
-            <>
-              <ReasonCard
-                ply={card}
-                tone={tone}
-                onHighlight={(sqs) => setHighlights(sqs)}
-                preview={preview ? { index: preview.index, total: preview.moves.length } : null}
-                onPreviewEnter={() => {
-                  if (card.pv?.length) setPreview({ moves: card.pv, index: 0 });
-                }}
-                onPreviewStep={(delta) =>
-                  setPreview((p) =>
-                    p
-                      ? { ...p, index: Math.max(0, Math.min(p.moves.length, p.index + delta)) }
-                      : p
-                  )
-                }
-                onPreviewExit={() => setPreview(null)}
-              />
-              <QuestionPanel
-                ply={card}
-                disabled={!!inspect || game.phase !== 'player'}
-                onAsk={(q) =>
-                  game.addQuestion(card, q, answerQuestion(card, q, tone, game.difficulty))
-                }
-              />
-            </>
-          )}
-
-          {import.meta.env.DEV && game.myTurn && (
-            <button data-testid="dev-move" className="dev" onClick={() => game.devAutoMove()}>
-              自动走一步（开发用）
-            </button>
-          )}
-
-          <section className="history">
-            <h2>棋谱</h2>
-            {game.plies.length === 0 ? (
-              <p className="hint">还没有走棋</p>
-            ) : (
-              <ol data-testid="history">
-                {game.plies.map((p, i) => {
-                  const meta = p.tier ? TIER_META[p.tier] : null;
-                  return (
-                    <li key={i} className={p.mover === 'red' ? 'red' : 'black'}>
-                      {p.mover === 'red' ? '红' : '黑'} {chineseMoves[i]}
-                      {meta && (
-                        <span style={{ marginLeft: 8, color: meta.color, fontSize: 12 }}>
-                          {meta.glyph}
-                        </span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ol>
-            )}
-          </section>
-        </aside>
+        {!detached && (
+          <SidePanel
+            phase={game.phase}
+            result={game.result}
+            tone={tone}
+            playerColor={game.playerColor}
+            myTurn={game.myTurn}
+            plies={game.plies}
+            chineseMoves={chineseMoves}
+            card={card}
+            inspectActive={!!inspect}
+            preview={preview ? { index: preview.index, total: preview.moves.length } : null}
+            onHighlight={(sqs) => setHighlights(sqs)}
+            onPreviewEnter={() => {
+              if (card?.pv?.length) setPreview({ moves: card.pv, index: 0 });
+            }}
+            onPreviewStep={(delta) =>
+              setPreview((p) =>
+                p ? { ...p, index: Math.max(0, Math.min(p.moves.length, p.index + delta)) } : p
+              )
+            }
+            onPreviewExit={() => setPreview(null)}
+            onInspect={(ply) => {
+              setPreview(null);
+              setHighlights([]);
+              setInspect(ply);
+            }}
+            onAsk={(ply, q) => game.addQuestion(ply, q, answerQuestion(ply, q, tone, game.difficulty))}
+            onDevMove={() => game.devAutoMove()}
+          />
+        )}
       </main>
     </div>
   );

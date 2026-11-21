@@ -9,6 +9,14 @@ export const crossOriginHeaders = {
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        panel: 'panel.html',
+      },
+    },
+  },
   server: {
     port: 5173,
     headers: crossOriginHeaders,

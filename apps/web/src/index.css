@@ -101,6 +101,28 @@ body {
   font-size: 13px;
 }
 
+.layout.detached {
+  justify-content: center;
+}
+
+.panel-app {
+  max-width: 620px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.panel-head h1 {
+  font-size: 20px;
+  margin: 0;
+  letter-spacing: 1px;
+}
+
 .history {
   background: #fffdf8;
   border: 1px solid #e2d8c3;
