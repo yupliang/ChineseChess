@@ -255,6 +255,12 @@ export default function App() {
             </>
           )}
 
+          {import.meta.env.DEV && game.myTurn && (
+            <button data-testid="dev-move" className="dev" onClick={() => game.devAutoMove()}>
+              自动走一步（开发用）
+            </button>
+          )}
+
           <section className="history">
             <h2>棋谱</h2>
             {game.plies.length === 0 ? (
@@ -277,12 +283,6 @@ export default function App() {
               </ol>
             )}
           </section>
-
-          {import.meta.env.DEV && game.myTurn && (
-            <button data-testid="dev-move" className="dev" onClick={() => game.devAutoMove()}>
-              自动走一步（开发用）
-            </button>
-          )}
         </aside>
       </main>
     </div>
