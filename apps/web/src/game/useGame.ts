@@ -159,8 +159,8 @@ export function useGame() {
         setSelected(null);
         baselineRef.current = null;
 
-        if (color === 'black') {
-          // 你执黑：红方先手，开局这步由电脑代劳
+        if (color === 'black' && !manualOpponent) {
+          // 你执黑：红方先手，开局这步由电脑代劳（选了「对手：我来走」就交给你）
           setStatus('对手先行（红方）…');
           const opening = await chooseEngineMove(pos);
           pos = applyMove(pos, parseUciMove(opening));
@@ -172,7 +172,7 @@ export function useGame() {
         setStatus('引擎就绪，正在计算…');
         await refreshBaseline(pos);
         setPhase('player');
-        setStatus(`你的回合（${label}）`);
+        setStatus(pos.turn === color ? `你的回合（${label}）` : '对手的回合（你来替他走）');
       } catch (e) {
         setError('引擎加载失败：' + (e instanceof Error ? e.message : String(e)));
         setPhase('idle');
@@ -181,7 +181,7 @@ export function useGame() {
         busyRef.current = false;
       }
     },
-    [chooseEngineMove, refreshBaseline]
+    [chooseEngineMove, manualOpponent, refreshBaseline]
   );
 
   const resume = useCallback(async () => {

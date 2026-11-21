@@ -156,7 +156,7 @@ export default function App() {
           </button>
           <button
             data-testid="opponent-mode"
-            disabled={!started || game.phase === 'loading'}
+            disabled={game.phase === 'loading'}
             onClick={game.toggleOpponentMode}
             title="选择轮到对手时由电脑走，还是你自己替他走"
           >
@@ -200,7 +200,9 @@ export default function App() {
             </p>
           ) : (
             !started && (
-              <p className="hint">选「执红先手」或「执黑后手」加载引擎，红方先走。</p>
+              <p className="hint">
+                选「执红先手」或「执黑后手」加载引擎，红方先走。想自己替对手走棋，先切换「对手：我来走」。
+              </p>
             )
           )}
         </div>
